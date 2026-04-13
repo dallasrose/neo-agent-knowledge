@@ -638,8 +638,8 @@ Rules for the implementing agent:
 
 After all phases:
 1. `uv run pytest tests/ -v` — all tests pass
-2. `uv run neo init` — creates database tables
-3. `uv run neo serve` — starts MCP server (stdio transport)
+2. `uv run neo setup --provider ollama --model llama3.2 --non-interactive` — creates Neo config and database tables
+3. `uv run neo serve --agent-name hermes` — starts MCP server (stdio transport)
 4. Connect Claude Code to Neo MCP server, call `find_node_by_title`, `get_node`, `get_branch`, `create_node`, `update_node`, `search_knowledge`, `get_sparks`
 5. `uv run neo consolidate` — runs consolidation pass
 6. `uv run neo` — REST API accessible at `localhost:8420/api/health`

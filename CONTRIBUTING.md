@@ -7,14 +7,14 @@ focused changes with tests are easiest to review.
 
 ```bash
 uv sync --extra dev
-uv run neo init
+uv run neo setup --provider ollama --model llama3.2 --non-interactive
 uv run pytest
 ```
 
 For local MCP testing:
 
 ```bash
-uv run neo serve
+uv run neo serve --agent-name hermes
 ```
 
 ## Contribution Terms

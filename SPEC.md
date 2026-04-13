@@ -1,6 +1,6 @@
 # NEO
 ## Semantic Knowledge Graph for AI Agents
-*Product Specification — v0.4 — April 2026*
+*Product Specification — April 2026*
 
 ---
 
@@ -458,4 +458,4 @@ PostgreSQL backend. Multi-agent network features. Knowledge import (Obsidian, No
 
 ---
 
-*— v0.4 —*
+*— April 2026 —*

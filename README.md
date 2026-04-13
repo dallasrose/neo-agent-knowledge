@@ -111,6 +111,7 @@ Neo exposes a small MCP tool surface for durable knowledge:
 | `link_nodes` | Add typed relationships such as `supports`, `contradicts`, or `extends`. |
 | `search_knowledge` | Search durable knowledge before answering research-heavy questions. |
 | `get_sparks` / `resolve_spark` / `abandon_spark` | Work Neo's research agenda. |
+| `investigate_spark` | Run the standard research/debate/judge resolver for one spark. |
 | `configure_agent` | Set the research direction, domains, skill notes, and optional source hints. |
 | `trigger_discovery` | Run discovery immediately for the current research direction. |
 | `ingest_youtube` | Ingest a YouTube transcript as distinct finding nodes. |

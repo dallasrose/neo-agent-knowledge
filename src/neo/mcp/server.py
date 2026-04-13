@@ -247,7 +247,7 @@ BEFORE STORING: call find_node_by_title first — if a match exists, call update
 Setting research direction:  user describes topics → configure_agent → confirm + describe pipeline
 Researching a topic:         search_knowledge → find_node_by_title (dedup) → create_node → link_nodes
 Checking what you know:      search_knowledge or get_node → summarize for user
-Working the research queue:  get_sparks → investigate → resolve_spark or abandon_spark
+Working the research queue:  get_sparks → investigate_spark, or manually investigate → resolve_spark/abandon_spark
 Ingesting a specific video:  ingest_youtube(url, title, speaker, domain)
 
 ── NODE & EDGE TYPES ────────────────────────────────────────────────────────────────────────────
@@ -360,6 +360,59 @@ async def abandon_spark_tool(**kwargs: Any) -> str:
     return json.dumps(result, default=str)
 
 
+async def _build_resolver(api):
+    from neo.core.resolver import ResolutionLLM, SparkResolver
+    from neo.core.web_search import WebSearchClient, NullWebSearch
+
+    res_key = settings.llm_resolution_api_key or settings.llm_spark_api_key
+    if not res_key:
+        raise RuntimeError("Spark investigation requires NEO_LLM_RESOLUTION_API_KEY or NEO_LLM_SPARK_API_KEY")
+    llm = ResolutionLLM(
+        api_key=res_key,
+        model=settings.llm_resolution_model or settings.llm_spark_model,
+        base_url=settings.llm_resolution_base_url or settings.llm_spark_base_url,
+    )
+    web_search = (
+        WebSearchClient(settings.search_provider, settings.search_api_key)
+        if settings.search_api_key
+        else NullWebSearch()
+    )
+    return SparkResolver(api, llm, web_search)
+
+
+async def investigate_spark_tool(**kwargs: Any) -> str:
+    api = await get_api()
+    agent = await ensure_default_agent(api)
+    spark_id = kwargs["spark_id"]
+    mode = kwargs.get("mode", "apply")
+
+    spark = None
+    for status in ("active", "resolved", "abandoned"):
+        sparks = await api.store.get_sparks(agent["id"], status=status, limit=500)
+        spark = next((s for s in sparks if s["id"] == spark_id), None)
+        if spark is not None:
+            break
+    if spark is None:
+        return json.dumps({"error": f"Spark {spark_id} not found"})
+    if spark.get("status") != "active" and mode == "apply":
+        return json.dumps({"error": f"Spark {spark_id} is already {spark.get('status')}"})
+
+    if spark.get("target_node_id"):
+        target = await api.store.get_node(spark["target_node_id"])
+        if target:
+            spark = {
+                **spark,
+                "target_title": target.get("title", ""),
+                "target_content": target.get("content", ""),
+                "target_summary": target.get("summary", ""),
+                "node_domain": target.get("domain"),
+            }
+
+    resolver = await _build_resolver(api)
+    result = await resolver.resolve(spark, agent, mode=mode, trigger="manual")
+    return json.dumps(result, default=str)
+
+
 async def get_activity_summary_tool(**kwargs: Any) -> str:
     api = await get_api()
     agent = await ensure_default_agent(api)
@@ -392,7 +445,7 @@ async def get_neo_guidance() -> str:
                 "orientation": ["get_neo_guidance", "get_agent_info", "get_activity_summary"],
                 "answer_from_memory": ["search_knowledge", "get_node if more detail is needed", "summarize for the user"],
                 "store_knowledge": ["find_node_by_title", "update_node if found, otherwise create_node", "link_nodes when relationships are clear"],
-                "research_queue": ["get_sparks", "investigate", "create_node or update_node", "resolve_spark or abandon_spark"],
+                "research_queue": ["get_sparks", "investigate_spark", "or manually investigate then resolve_spark/abandon_spark"],
                 "research_direction": ["configure_agent", "trigger_discovery if immediate ingestion is useful"],
             },
             "node_types": {
@@ -416,6 +469,7 @@ async def get_neo_guidance() -> str:
                 "Before storing, call find_node_by_title to avoid duplicates.",
                 "Use update_node instead of create_node when a matching node already exists.",
                 "When parent_id is omitted, Neo stores new knowledge under the agent root.",
+                "Use investigate_spark for the standard spark research/debate/judge pipeline.",
                 "After every Neo tool call, synthesize the returned data in natural language for the user.",
             ],
         },
@@ -594,7 +648,11 @@ async def get_sparks(status: str = "active", spark_type: str | None = None, doma
     status: active | resolved | abandoned
     limit: default 3 — work sparks in small batches to stay within context. Call again after resolving to get the next batch.
 
-    Investigation protocol (this docstring is the canonical source — not any node in the graph):
+    Preferred protocol:
+    Call investigate_spark(spark_id, mode="apply"). Neo will run the same
+    role-isolated research/debate/judge pipeline used by the background resolver.
+
+    Manual fallback:
     1. Read the target node and its immediate neighbours (get_node with include_edges=true).
     2. Form a conclusion. If debating with a sub-agent, limit to 2 turns each; extract the answer, discard the dialogue.
     3. Store exactly one node with the settled insight (or update an existing node if one already covers it).
@@ -603,6 +661,27 @@ async def get_sparks(status: str = "active", spark_type: str | None = None, doma
     RULE: Every spark you touch must end with resolve_spark or abandon_spark before you move to the next one.
     Never leave a spark open after investigating it. A spark is only closed when one of those two tools is called."""
     return await get_sparks_tool(status=status, spark_type=spark_type, domain=domain, min_priority=min_priority, limit=limit)
+
+
+@mcp.tool()
+async def investigate_spark(spark_id: str, mode: str = "apply") -> str:
+    """Run Neo's standard spark investigation pipeline.
+
+    spark_id: UUID of the spark to investigate
+    mode: "apply" mutates the graph and closes the spark; "preview" returns
+          candidates and blind judge votes without mutation.
+
+    The same pipeline is used for manual and background resolution:
+    context collection → internal/web research → Candidate A → Candidate B →
+    Candidate AB synthesis → blind judge panel → winning graph action.
+
+    Outcomes can create a node, update the target node, resolve with no graph
+    change, or abandon a false-positive spark. Resolved sparks disappear from
+    the active visualizer queue; nodes that absorb sparks turn progressively
+    gold and physically stronger."""
+    if mode not in {"apply", "preview"}:
+        return json.dumps({"error": "mode must be 'apply' or 'preview'"})
+    return await investigate_spark_tool(spark_id=spark_id, mode=mode)
 
 
 @mcp.tool()

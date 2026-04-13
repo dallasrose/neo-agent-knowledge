@@ -348,6 +348,22 @@ node_ids       one or more nodes this spark became
 notes          optional — what was found, what remains open
 ```
 
+### `investigate_spark`
+*Run the standard spark resolution pipeline.*
+
+```
+spark_id       which spark to investigate
+mode           preview | apply
+```
+
+The pipeline is the same for manual and background triggers: collect graph
+context and evidence, generate Candidate A, Candidate B, and Candidate AB with
+role-isolated agents, judge them blindly, then apply the winning action. Winning
+actions are `create_node`, `update_target`, `resolve_no_change`, or `abandon`.
+Resolved sparks leave the active queue. Sparks resolved into nodes increase the
+node's resolved spark count, which the visualiser uses to turn the node gold and
+increase graph strength.
+
 The spark persists in the graph with status `resolved`, linked bidirectionally to the nodes it produced. If researching the spark opened new questions, store those as question-type nodes before resolving — they will generate new sparks automatically. A spark can also be marked `abandoned` if it was superseded or turned out to be the wrong question.
 
 ---

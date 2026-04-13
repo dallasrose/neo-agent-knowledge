@@ -179,14 +179,20 @@ create_node()
     → contemplation loop notices structural gap
     → spark generated with description and priority
     → agent calls get_sparks() → sees agenda
-    → agent investigates (reads neighbours, may debate sub-agent)
-    → agent stores or updates a node with settled insight
-    → agent calls resolve_spark(node_id)
+    → investigate_spark or background resolver runs the same pipeline
+    → context + evidence → Candidate A → Candidate B → Candidate AB
+    → blind judge panel chooses the graph action
+    → create/update/resolve-no-change/abandon
     → node gains spark count → visualiser blends toward gold
     → consolidation eventually synthesises related findings
 ```
 
-Spark resolution is always agent-driven. It requires reasoning, web research, and judgment. The contemplation loop generates the agenda. The agent executes it.
+Spark resolution is one pipeline regardless of trigger. Manual calls and the
+background resolver both use role-isolated agents and blind judges. Sparks are
+not always attacks on the current graph; the graph is context, and the candidate
+agents argue spark-type-specific interpretations or resolution paths. Resolved
+sparks leave the active queue and are counted against the node they resolved
+into, making that node stronger and more gold in the visualiser.
 
 ---
 
@@ -209,6 +215,7 @@ Neo exposes a stdio MCP server (`neo serve`). Spawned on-demand by the agent fra
 | `link_nodes` | Create a typed edge between two nodes |
 | `search_knowledge` | Semantic search with graph expansion — the primary retrieval tool |
 | `get_sparks` | Retrieve prioritised research agenda |
+| `investigate_spark` | Run context/evidence collection, role-isolated candidates, blind judges, and apply the winning graph action |
 | `resolve_spark` | Close a spark, link to the node it produced |
 | `abandon_spark` | Close a spark that was a false positive |
 | `get_activity_summary` | Structured activity since a timestamp |

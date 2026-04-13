@@ -259,7 +259,7 @@ def test_tools_list_returns_all_tools(http_server):
     expected = {
         "create_node", "store_node", "get_node", "get_branch", "find_node_by_title",
         "link_nodes", "update_node", "search_knowledge",
-        "get_sparks", "resolve_spark", "abandon_spark", "get_activity_summary", "delete_node",
+        "get_sparks", "investigate_spark", "resolve_spark", "abandon_spark", "get_activity_summary", "delete_node",
         "get_neo_guidance",
         "configure_agent", "get_agent_info", "trigger_discovery",
         "ingest_youtube",

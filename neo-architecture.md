@@ -184,8 +184,8 @@ class StoreInterface(ABC):
     # Spark CRUD
     async def create_spark(agent_id, spark_type, description, *, priority, domain, target_node_id, source_id, metadata) -> dict
     async def get_sparks(agent_id, *, status="active", spark_type, domain, min_priority, limit) -> list[dict]
-    async def resolve_spark(spark_id, resolved_node_ids) -> dict
-    async def abandon_spark(spark_id) -> dict
+    async def resolve_spark(spark_id, resolved_node_ids, *, notes, metadata) -> dict
+    async def abandon_spark(spark_id, *, reason, metadata) -> dict
 
     # Vector Search
     async def vector_search(agent_id, query_embedding, *, top_k, node_type, domain, min_confidence) -> list[dict]
@@ -285,12 +285,23 @@ Returns `{nodes: [...], edges: [...], contradictions: [...], sparks: [...], tota
 1. `store.get_sparks(agent_id, status="active", ...)` — sorted by priority desc
 2. Return list of spark dicts with descriptions
 
-### 9. `resolve_spark` → `NeoAPI.resolve_spark()`
+### 9. `investigate_spark` / background resolution → `SparkResolver.resolve()`
+1. Collect target node, internal graph context, generated search queries, web results, and transcript excerpts when available
+2. Run role-isolated Candidate A and Candidate B agents using spark-type-specific framing
+3. Run Candidate AB synthesis agent
+4. Run three blind judge agents over anonymised candidates
+5. Apply the winning action: create node, update target, resolve with no graph change, or abandon
+6. Store resolution metadata on the spark: method, trigger, candidates, judge votes, evidence, and winner
+
+The MCP tool and `ResolutionScheduler` call the same resolver. Trigger metadata
+changes; the process does not.
+
+### 10. `resolve_spark` → `NeoAPI.resolve_spark()`
 1. Validate spark is active, all produced node IDs exist
-2. `store.resolve_spark(spark_id, node_ids)`
+2. `store.resolve_spark(spark_id, node_ids, notes, metadata)`
 3. Return result
 
-### 10. `get_activity_summary` → `NeoAPI.get_activity_summary()`
+### 11. `get_activity_summary` → `NeoAPI.get_activity_summary()`
 1. Parse `since` as ISO datetime (default: 24h ago)
 2. `store.get_activity(agent_id, since_dt)`
 3. Return structured summary: `{period, counts: {nodes_created, nodes_updated, edges_created, sparks_generated, sparks_resolved}, recent_nodes, active_sparks, contradictions, domains_active}`

@@ -64,6 +64,7 @@ class ResolveSparkRequest(BaseModel):
 
     node_ids: list[str] | None = None
     notes: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class ConfigureAgentRequest(BaseModel):

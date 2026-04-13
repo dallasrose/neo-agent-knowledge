@@ -30,7 +30,8 @@ function makeNodeObject(node: GraphNode, isSelected: boolean, isHighlighted: boo
   const color = sparkCount > 0 ? blendHex(base, SPARK_GOLD, sparkBlendFactor(sparkCount)) : base
   // Deeper in the hierarchy = smaller; roots and agent-level nodes stand out
   const depthScale = depth === 0 ? 3.2 : depth === 1 ? 2.0 : 1.0
-  const size = NODE_BASE_SIZE * (0.6 + node.confidence * 0.4) * depthScale
+  const sparkScale = 1 + Math.min(sparkCount, 8) * 0.08
+  const size = NODE_BASE_SIZE * (0.6 + node.confidence * 0.4) * depthScale * sparkScale
   const emissiveIntensity = isSelected ? 0.7 : isHighlighted ? 0.4 : 0.15
 
   const mat = new THREE.MeshLambertMaterial({
@@ -43,6 +44,10 @@ function makeNodeObject(node: GraphNode, isSelected: boolean, isHighlighted: boo
   const mesh = new THREE.Mesh(sphereGeo, mat)
   mesh.scale.setScalar(size)
   return mesh
+}
+
+function endpointId(endpoint: string | GraphNode): string {
+  return typeof endpoint === 'string' ? endpoint : endpoint.id
 }
 
 function makeSparkObject(spark: NeoSpark): THREE.Mesh {
@@ -201,6 +206,20 @@ const Graph = forwardRef<GraphHandle, Props>(function Graph({
     return makeNodeObject(n, isSelected, isHighlighted, sparkCount, depth)
   }, [selectedId, highlightIds, sparkNodeCounts, depthMap])
 
+  useEffect(() => {
+    const linkForce = fgRef.current?.d3Force?.('link')
+    if (!linkForce?.strength) return
+    linkForce.strength((link: GraphLink) => {
+      const sourceCount = sparkNodeCounts[endpointId(link.source)] ?? 0
+      const targetCount = sparkNodeCounts[endpointId(link.target)] ?? 0
+      const absorbed = Math.max(sourceCount, targetCount)
+      if (link.id?.startsWith('spark-link:')) return 0.12
+      if (link.edge_type === 'parent') return 0.45 + Math.min(absorbed, 8) * 0.04
+      return 0.25 + Math.min(absorbed, 8) * 0.05
+    })
+    fgRef.current?.d3ReheatSimulation?.()
+  }, [allLinks, sparkNodeCounts])
+
   const linkColor = useCallback((link: object) => {
     const l = link as GraphLink
     if (l.id?.startsWith('spark-link:')) return SPARK_COLOR + '66'
@@ -209,8 +228,11 @@ const Graph = forwardRef<GraphHandle, Props>(function Graph({
 
   const linkWidth = useCallback((link: object) => {
     const l = link as GraphLink
-    return l.id?.startsWith('spark-link:') ? 0.3 : l.weight * 1.5
-  }, [])
+    const sourceCount = sparkNodeCounts[endpointId(l.source)] ?? 0
+    const targetCount = sparkNodeCounts[endpointId(l.target)] ?? 0
+    const absorbed = Math.max(sourceCount, targetCount)
+    return l.id?.startsWith('spark-link:') ? 0.3 : l.weight * (1.5 + Math.min(absorbed, 8) * 0.08)
+  }, [sparkNodeCounts])
 
   // Zoom close to a node and open its detail panel
   const handleNodeClick = useCallback((node: object) => {

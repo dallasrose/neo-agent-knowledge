@@ -1,4 +1,4 @@
-"""Background spark resolver — intelligent debate pattern with web research.
+"""Spark resolver — role-isolated debate and blind judgment with research.
 
 Research strategy:
   1. Pull internal graph context around the spark.
@@ -6,9 +6,9 @@ Research strategy:
      spark description) so we explore the topic broadly.
   3. Prefer recent content — Tavily/Exa use a 90-day window by default.
   4. For any YouTube URLs in results, fetch the actual transcript excerpt.
-  5. Run a 3-call debate: argue for → argue against → synthesise.
-  6. Store the settled conclusion as a finding node and resolve the spark.
-  7. Enable spark generation on the new finding so the research chain
+  5. Run role-isolated candidate agents: A, B, and AB synthesis.
+  6. Run blind judge agents and apply the winning decision.
+  7. Enable spark generation on any new finding so the research chain
      continues — findings naturally raise follow-up questions.
 """
 from __future__ import annotations
@@ -18,6 +18,123 @@ import logging
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+_ACTIONS = {"create_node", "update_target", "resolve_no_change", "abandon"}
+_CANDIDATE_LABELS = ("A", "B", "AB")
+
+
+def _extract_json(raw: str, fallback: Any) -> Any:
+    raw = (raw or "").strip()
+    if raw.startswith("```"):
+        parts = raw.split("```")
+        raw = parts[1] if len(parts) > 1 else raw
+        if raw.startswith("json"):
+            raw = raw[4:]
+        raw = raw.strip()
+    obj_start, obj_end = raw.find("{"), raw.rfind("}") + 1
+    arr_start, arr_end = raw.find("["), raw.rfind("]") + 1
+    try:
+        if obj_start >= 0 and obj_end > obj_start and (arr_start < 0 or obj_start < arr_start):
+            return json.loads(raw[obj_start:obj_end])
+        if arr_start >= 0 and arr_end > arr_start:
+            return json.loads(raw[arr_start:arr_end])
+    except Exception:
+        return fallback
+    return fallback
+
+
+def _words(text: str, limit: int) -> str:
+    parts = (text or "").split()
+    if len(parts) <= limit:
+        return " ".join(parts)
+    return " ".join(parts[:limit]) + "..."
+
+
+def _strategy_for(spark_type: str) -> dict[str, str]:
+    strategies = {
+        "contradiction": {
+            "objective": "Resolve a possible contradiction without overclaiming.",
+            "a": "Defend one plausible reading or side of the tension.",
+            "b": "Defend the competing reading or side of the tension.",
+            "ab": "Reconcile, choose, or preserve uncertainty with a clear graph action.",
+        },
+        "open_question": {
+            "objective": "Answer the open question if durable knowledge is available.",
+            "a": "Develop one evidence-backed answer to the question.",
+            "b": "Develop a distinct evidence-backed answer, mechanism, or skeptical framing.",
+            "ab": "Synthesize the best current answer and remaining uncertainty.",
+        },
+        "weak_edge": {
+            "objective": "Decide whether a graph relationship should be kept, revised, or discarded.",
+            "a": "Argue the relationship is meaningful and useful.",
+            "b": "Argue the relationship is weak, indirect, misleading, or mis-typed.",
+            "ab": "Decide the most accurate graph treatment.",
+        },
+        "isolated_node": {
+            "objective": "Integrate isolated knowledge when a durable connection exists.",
+            "a": "Argue the strongest placement or relationship for this knowledge.",
+            "b": "Argue an alternative placement, relationship, or reason to leave it isolated.",
+            "ab": "Decide whether to store, link, update, or close without change.",
+        },
+        "thin_domain": {
+            "objective": "Identify whether the domain gap has a durable next knowledge target.",
+            "a": "Argue the highest-value missing knowledge to add next.",
+            "b": "Argue an alternative gap or why the spark is not worth resolving now.",
+            "ab": "Decide the durable knowledge action or close without graph change.",
+        },
+    }
+    return strategies.get(spark_type, strategies["open_question"])
+
+
+def _candidate_from_raw(label: str, raw: Any, fallback_text: str) -> dict[str, Any]:
+    data = raw if isinstance(raw, dict) else {}
+    content = str(data.get("content") or data.get("rationale") or fallback_text or "").strip()
+    title = str(data.get("title") or _words(content, 10) or f"Spark resolution {label}").strip()
+    summary = str(data.get("summary") or _words(content, 28) or title).strip()
+    action = str(data.get("recommended_action") or data.get("action") or "create_node").strip()
+    if action not in _ACTIONS:
+        action = "create_node"
+    node_type = str(data.get("node_type") or "finding").strip()
+    if node_type not in {"finding", "theory", "synthesis"}:
+        node_type = "finding"
+    try:
+        confidence = max(0.0, min(1.0, float(data.get("confidence", 0.6))))
+    except (TypeError, ValueError):
+        confidence = 0.6
+    return {
+        "label": label,
+        "title": title[:90],
+        "summary": summary[:240],
+        "content": content,
+        "confidence": confidence,
+        "recommended_action": action,
+        "node_type": node_type,
+        "rationale": str(data.get("rationale") or summary).strip()[:500],
+    }
+
+
+def _vote_from_raw(raw: Any, judge_index: int) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    ranking = raw.get("ranking")
+    if not isinstance(ranking, list):
+        winner = str(raw.get("winner") or "").strip().upper()
+        ranking = [winner] if winner in _CANDIDATE_LABELS else []
+    clean_ranking: list[str] = []
+    for label in ranking:
+        label = str(label).strip().upper()
+        if label in _CANDIDATE_LABELS and label not in clean_ranking:
+            clean_ranking.append(label)
+    for label in _CANDIDATE_LABELS:
+        if label not in clean_ranking:
+            clean_ranking.append(label)
+    winner = clean_ranking[0]
+    return {
+        "judge": judge_index,
+        "ranking": clean_ranking,
+        "winner": winner,
+        "rationale": str(raw.get("rationale") or "").strip()[:500],
+    }
 
 
 class ResolutionLLM:
@@ -125,9 +242,199 @@ Respond with a JSON array of strings only, e.g. ["query one", "query two", "quer
             pass
         return excerpts
 
+    # ── Candidate / judge agents ─────────────────────────────────────────────
+
+    async def _candidate_agent(
+        self,
+        *,
+        label: str,
+        role: str,
+        base: str,
+        strategy: dict[str, str],
+        prior_candidates: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        prior = ""
+        if prior_candidates:
+            prior = "\n\nExisting candidates:\n" + "\n\n".join(
+                f"Candidate {c['label']}: {c['title']}\nSummary: {c['summary']}\nAction: {c['recommended_action']}\nContent: {c['content']}"
+                for c in prior_candidates
+            )
+        prompt = f"""ROLE: POSITION_{label}
+
+You are one role-isolated spark resolution agent. You do not share hidden state
+with the other agents. Use only the supplied graph context and evidence.
+
+Resolution objective: {strategy['objective']}
+Your assignment: {role}
+
+{base}{prior}
+
+Return JSON only:
+{{
+  "title": "short durable knowledge title",
+  "summary": "one sentence",
+  "content": "2-4 sentences with the resolved insight or rationale",
+  "confidence": 0.0,
+  "recommended_action": "create_node|update_target|resolve_no_change|abandon",
+  "node_type": "finding|theory|synthesis",
+  "rationale": "why this action fits the spark"
+}}"""
+        raw = await self.llm.call(prompt, max_tokens=900)
+        parsed = _extract_json(raw, {})
+        return _candidate_from_raw(label, parsed, raw)
+
+    async def _judge_candidates(
+        self,
+        *,
+        base: str,
+        candidates: list[dict[str, Any]],
+        strategy: dict[str, str],
+        judge_count: int = 3,
+    ) -> tuple[str, list[dict[str, Any]], dict[str, int]]:
+        candidate_text = "\n\n".join(
+            f"Candidate {c['label']}\nTitle: {c['title']}\nSummary: {c['summary']}\nAction: {c['recommended_action']}\nContent: {c['content']}"
+            for c in candidates
+        )
+        votes: list[dict[str, Any]] = []
+        scores = {label: 0 for label in _CANDIDATE_LABELS}
+        for idx in range(1, judge_count + 1):
+            prompt = f"""ROLE: JUDGE_{idx}
+
+You are an independent blind judge for a spark resolution tournament.
+Judge the candidates only by how well they resolve the spark.
+
+Resolution objective: {strategy['objective']}
+
+Criteria:
+- resolves the spark directly
+- grounded in graph context and evidence
+- durable enough to store as knowledge, or correctly chooses no graph change
+- avoids overclaiming
+- preserves uncertainty when needed
+
+{base}
+
+Candidates:
+{candidate_text}
+
+Return JSON only:
+{{
+  "ranking": ["AB", "A", "B"],
+  "winner": "AB",
+  "rationale": "brief reason for the ranking"
+}}"""
+            try:
+                raw = await self.llm.call(prompt, max_tokens=500)
+                vote = _vote_from_raw(_extract_json(raw, {}), idx)
+            except Exception as exc:
+                logger.debug("Resolver judge %d failed: %s", idx, exc)
+                vote = None
+            if vote is None:
+                continue
+            votes.append(vote)
+            for points, label in zip((3, 2, 1), vote["ranking"], strict=False):
+                scores[label] = scores.get(label, 0) + points
+        if not votes:
+            scores["AB"] = 1
+            return "AB", [], scores
+        winner = max(_CANDIDATE_LABELS, key=lambda label: (scores.get(label, 0), label == "AB"))
+        return winner, votes, scores
+
+    async def _apply_decision(
+        self,
+        *,
+        spark: dict,
+        agent: dict,
+        candidate: dict[str, Any],
+        decision_metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        spark_id = spark["id"]
+        agent_id = agent["id"]
+        action = candidate["recommended_action"]
+        notes = candidate.get("summary") or candidate.get("rationale") or candidate["title"]
+
+        if action == "abandon":
+            result = await self.api.store.abandon_spark(
+                spark_id,
+                reason=notes,
+                metadata=decision_metadata,
+            )
+            return {"success": True, "spark_id": spark_id, "outcome": "abandoned", "spark": result}
+
+        if action == "resolve_no_change":
+            result = await self.api.resolve_spark(
+                spark_id=spark_id,
+                node_ids=[],
+                notes=notes,
+                metadata=decision_metadata,
+            )
+            return {"success": True, "spark_id": spark_id, "outcome": "resolved_no_change", "spark": result}
+
+        if action == "update_target" and spark.get("target_node_id"):
+            node_id = spark["target_node_id"]
+            node = await self.api.update_node(
+                node_id=node_id,
+                content=candidate["content"],
+                summary=candidate["summary"],
+                confidence=candidate["confidence"],
+                metadata={"spark_resolution": decision_metadata},
+            )
+            result = await self.api.resolve_spark(
+                spark_id=spark_id,
+                node_ids=[node_id],
+                notes=notes,
+                metadata=decision_metadata,
+            )
+            return {
+                "success": True,
+                "spark_id": spark_id,
+                "outcome": "updated_node",
+                "node_id": node_id,
+                "node": node,
+                "spark": result,
+            }
+
+        node = await self.api.store_node(
+            agent_id=agent_id,
+            node_type=candidate["node_type"],
+            title=candidate["title"],
+            content=candidate["content"],
+            summary=candidate["summary"],
+            confidence=candidate["confidence"],
+            parent_id=spark.get("target_node_id"),
+            spark_id=spark_id,
+            domain=spark.get("node_domain") or spark.get("domain") or ((agent.get("domains") or [None])[0]),
+            metadata={"spark_resolution": decision_metadata},
+            generate_sparks=True,
+            deduplicate=True,
+        )
+        result = await self.api.resolve_spark(
+            spark_id=spark_id,
+            node_ids=[node["id"]],
+            notes=notes,
+            metadata=decision_metadata,
+        )
+        return {
+            "success": True,
+            "spark_id": spark_id,
+            "outcome": "created_node" if not node.get("duplicate") else "reused_duplicate",
+            "node_id": node["id"],
+            "node": node,
+            "spark": result,
+        }
+
     # ── Main resolution flow ──────────────────────────────────────────────────
 
-    async def resolve(self, spark: dict, agent: dict) -> dict[str, Any]:
+    async def resolve(
+        self,
+        spark: dict,
+        agent: dict,
+        *,
+        mode: str = "apply",
+        trigger: str = "background",
+    ) -> dict[str, Any]:
+        if mode not in {"preview", "apply"}:
+            raise ValueError("mode must be 'preview' or 'apply'")
         agent_id = agent["id"]
         spark_id = spark["id"]
         description = spark.get("description", "")
@@ -180,6 +487,7 @@ Respond with a JSON array of strings only, e.g. ["query one", "query two", "quer
         transcript_excerpts = await self._fetch_transcripts(results, description)
 
         # 5. Assemble debate context
+        strategy = _strategy_for(spark.get("spark_type", "open_question"))
         focus_line = f"Agent research direction: {agent_focus}\n" if agent_focus else ""
         transcripts_section = (
             "\n\nPodcast / video transcripts:\n" + "\n\n".join(transcript_excerpts)
@@ -195,58 +503,106 @@ Internal knowledge:
 Web research (recency-biased, dates shown where available):
 {web or 'None'}{transcripts_section}"""
 
-        # 6. Debate + synthesis
+        # 6. Role-isolated agents + blind judges
         try:
-            pos_a = await self.llm.call(
-                f"{base}\n\nArgue that this spark's question or tension is real and important. "
-                "Ground your argument in the evidence above. 2-3 sentences."
+            candidate_a = await self._candidate_agent(
+                label="A",
+                role=strategy["a"],
+                base=base,
+                strategy=strategy,
             )
-            pos_b = await self.llm.call(
-                f"{base}\n\nPosition A: {pos_a}\n\n"
-                "Argue the other side — complicate, refute, or add important nuance. "
-                "Use specific evidence where possible. 2-3 sentences."
+            candidate_b = await self._candidate_agent(
+                label="B",
+                role=strategy["b"],
+                base=base,
+                strategy=strategy,
+                prior_candidates=[candidate_a],
             )
-            raw = await self.llm.call(
-                f"""{base}
-
-Position A: {pos_a}
-Position B: {pos_b}
-
-Synthesise into a settled conclusion grounded in the evidence. Prefer recent findings.
-Respond as JSON only:
-{{"title": "short noun phrase under 60 chars", "summary": "one compressed sentence", "content": "2-4 sentence settled conclusion citing evidence", "confidence": 0.0}}"""
+            candidate_ab = await self._candidate_agent(
+                label="AB",
+                role=strategy["ab"],
+                base=base,
+                strategy=strategy,
+                prior_candidates=[candidate_a, candidate_b],
             )
-            start, end = raw.find("{"), raw.rfind("}") + 1
-            result = json.loads(raw[start:end])
+            candidates = [candidate_a, candidate_b, candidate_ab]
+            winner, judge_votes, judge_scores = await self._judge_candidates(
+                base=base,
+                candidates=candidates,
+                strategy=strategy,
+            )
         except Exception as e:
-            logger.warning("Resolver: debate/synthesis failed: %s", e)
+            logger.warning("Resolver: debate/judgment failed: %s", e)
             return {"success": False, "spark_id": spark_id, "error": str(e)}
 
-        # 7. Store finding + resolve spark
-        # generate_sparks=True so the finding can raise follow-up questions,
-        # creating a research chain: finding → new sparks → future resolutions.
+        winning_candidate = next(c for c in candidates if c["label"] == winner)
+        decision_metadata = {
+            "resolution_method": "debate_judge_v1",
+            "trigger": trigger,
+            "mode": mode,
+            "objective": strategy["objective"],
+            "winner": winner,
+            "winning_action": winning_candidate["recommended_action"],
+            "queries": queries,
+            "evidence": [
+                {
+                    "title": r.get("title", ""),
+                    "url": r.get("url", ""),
+                    "published": r.get("published", ""),
+                    "score": r.get("score", 0.0),
+                }
+                for r in results[:8]
+            ],
+            "candidate_summaries": {
+                c["label"]: {
+                    "title": c["title"],
+                    "summary": c["summary"],
+                    "recommended_action": c["recommended_action"],
+                    "confidence": c["confidence"],
+                }
+                for c in candidates
+            },
+            "judge_votes": judge_votes,
+            "judge_scores": judge_scores,
+        }
+
+        if mode == "preview":
+            return {
+                "success": True,
+                "spark_id": spark_id,
+                "outcome": "preview",
+                "winner": winner,
+                "winning_candidate": winning_candidate,
+                "candidates": candidates,
+                "judge_votes": judge_votes,
+                "judge_scores": judge_scores,
+                "queries": queries,
+                "evidence_count": len(results),
+            }
+
         try:
-            node = await self.api.store_node(
-                agent_id=agent_id,
-                node_type="finding",
-                title=result["title"],
-                content=result["content"],
-                summary=result.get("summary", ""),
-                confidence=float(result.get("confidence", 0.6)),
-                spark_id=spark_id,
-                domain=spark.get("node_domain") or (domains[0] if domains else None),
-                generate_sparks=True,   # follow the research path
-            )
-            await self.api.store.resolve_spark(
-                spark_id=spark_id,
-                resolved_node_ids=[node["id"]],
-                notes=result.get("summary", ""),
+            applied = await self._apply_decision(
+                spark=spark,
+                agent=agent,
+                candidate=winning_candidate,
+                decision_metadata=decision_metadata,
             )
             logger.info(
-                "Resolver: spark %s → finding node %s (sparks queued)",
-                spark_id, node["id"],
+                "Resolver: spark %s → %s via candidate %s",
+                spark_id,
+                applied.get("outcome"),
+                winner,
             )
-            return {"success": True, "spark_id": spark_id, "node_id": node["id"]}
+            return {
+                **applied,
+                "winner": winner,
+                "winning_candidate": {
+                    "title": winning_candidate["title"],
+                    "summary": winning_candidate["summary"],
+                    "recommended_action": winning_candidate["recommended_action"],
+                },
+                "judge_scores": judge_scores,
+            }
         except Exception as e:
-            logger.warning("Resolver: store failed: %s", e)
+            logger.warning("Resolver: apply failed: %s", e)
             return {"success": False, "spark_id": spark_id, "error": str(e)}

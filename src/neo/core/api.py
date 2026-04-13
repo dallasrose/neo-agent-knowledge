@@ -364,12 +364,13 @@ class NeoAPI:
         spark_id: str,
         node_ids: list[str] | None = None,
         notes: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         node_ids = node_ids or []
         for node_id in node_ids:
             if not await self.store.get_node(node_id):
                 raise ValueError(f"Node {node_id} not found")
-        return await self.store.resolve_spark(spark_id, node_ids, notes=notes)
+        return await self.store.resolve_spark(spark_id, node_ids, notes=notes, metadata=metadata)
 
     async def abandon_spark(
         self,
@@ -377,10 +378,7 @@ class NeoAPI:
         spark_id: str,
         reason: str | None = None,
     ) -> dict[str, Any]:
-        abandoned = await self.store.abandon_spark(spark_id)
-        if reason:
-            abandoned["metadata"]["reason"] = reason
-        return abandoned
+        return await self.store.abandon_spark(spark_id, reason=reason)
 
     async def configure_agent(
         self,

@@ -130,11 +130,24 @@ class StoreInterface(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def resolve_spark(self, spark_id: str, resolved_node_ids: list[str]) -> dict[str, Any]:
+    async def resolve_spark(
+        self,
+        spark_id: str,
+        resolved_node_ids: list[str],
+        *,
+        notes: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         raise NotImplementedError
 
     @abstractmethod
-    async def abandon_spark(self, spark_id: str) -> dict[str, Any]:
+    async def abandon_spark(
+        self,
+        spark_id: str,
+        *,
+        reason: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         raise NotImplementedError
 
     @abstractmethod

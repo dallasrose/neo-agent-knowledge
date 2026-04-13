@@ -184,11 +184,14 @@ async def get_graph(
     edges = await api.store.get_all_edges(agent["id"], limit=limit * 4)
     active_sparks = await api.store.get_sparks(agent["id"], status="active", limit=200)
     resolved_sparks = await api.store.get_sparks(agent["id"], status="resolved", limit=500)
-    # Count how many resolved sparks each node has absorbed — drives cumulative colour tinting
+    # Count how many resolved sparks each node has absorbed. Active sparks render
+    # as spark nodes; resolved sparks disappear and strengthen/tint their nodes.
     spark_node_counts: dict[str, int] = {}
     for s in resolved_sparks:
-        nid = s.get("resolved_node_id")
-        if nid:
+        node_ids = (s.get("metadata") or {}).get("resolved_node_ids") or []
+        if not node_ids and s.get("resolved_node_id"):
+            node_ids = [s["resolved_node_id"]]
+        for nid in node_ids:
             spark_node_counts[nid] = spark_node_counts.get(nid, 0) + 1
     return {
         "nodes": [compact_node(n) for n in nodes],

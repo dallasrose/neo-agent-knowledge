@@ -58,7 +58,7 @@ class ResolutionScheduler:
         logger.info("Resolution: %d sparks to process", len(sparks))
         for spark in sparks:
             try:
-                result = await self.resolver.resolve(spark, agent)
+                result = await self.resolver.resolve(spark, agent, mode="apply", trigger="background")
                 status = "resolved" if result.get("success") else "failed"
                 logger.info("Resolution: spark %s %s", result.get("spark_id"), status)
             except Exception as e:

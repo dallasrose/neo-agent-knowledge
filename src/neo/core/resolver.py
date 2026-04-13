@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,35 @@ def _words(text: str, limit: int) -> str:
     if len(parts) <= limit:
         return " ".join(parts)
     return " ".join(parts[:limit]) + "..."
+
+
+def _strip_json_fence(raw: str) -> str:
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        parts = text.split("```")
+        text = parts[1] if len(parts) > 1 else text
+    text = text.strip()
+    if text.lower().startswith("json"):
+        text = text[4:].strip()
+    return text
+
+
+def _salvage_jsonish_dict(raw: str) -> dict[str, Any]:
+    """Recover useful fields from malformed/truncated JSON-like LLM output."""
+    text = _strip_json_fence(raw)
+    salvaged: dict[str, Any] = {}
+    for key in ("title", "summary", "content", "recommended_action", "action", "node_type", "rationale"):
+        match = re.search(
+            rf'"{key}"\s*:\s*"(?P<value>(?:\\.|[^"\\])*)',
+            text,
+            flags=re.DOTALL,
+        )
+        if match:
+            salvaged[key] = bytes(match.group("value"), "utf-8").decode("unicode_escape", errors="ignore")
+    confidence = re.search(r'"confidence"\s*:\s*(?P<value>[0-9]+(?:\.[0-9]+)?)', text)
+    if confidence:
+        salvaged["confidence"] = confidence.group("value")
+    return salvaged
 
 
 def _strategy_for(spark_type: str) -> dict[str, str]:
@@ -88,7 +118,10 @@ def _strategy_for(spark_type: str) -> dict[str, str]:
 
 def _candidate_from_raw(label: str, raw: Any, fallback_text: str) -> dict[str, Any]:
     data = raw if isinstance(raw, dict) else {}
-    content = str(data.get("content") or data.get("rationale") or fallback_text or "").strip()
+    if not data:
+        data = _salvage_jsonish_dict(fallback_text)
+    clean_fallback = _strip_json_fence(fallback_text)
+    content = str(data.get("content") or data.get("rationale") or clean_fallback or "").strip()
     title = str(data.get("title") or _words(content, 10) or f"Spark resolution {label}").strip()
     summary = str(data.get("summary") or _words(content, 28) or title).strip()
     action = str(data.get("recommended_action") or data.get("action") or "create_node").strip()

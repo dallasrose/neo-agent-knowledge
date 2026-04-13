@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from neo.core.api import NeoAPI
-from neo.core.resolver import SparkResolver
+from neo.core.resolver import SparkResolver, _candidate_from_raw
 from neo.store.sqlite import SQLiteStore
 
 
@@ -134,3 +134,22 @@ async def test_spark_resolution_can_resolve_without_graph_change(session_factory
     resolved = (await store.get_sparks(agent["id"], status="resolved", limit=10))[0]
     assert resolved["metadata"]["resolved_node_ids"] == []
     assert resolved["metadata"]["winning_action"] == "resolve_no_change"
+
+
+def test_candidate_parser_salvages_malformed_fenced_json():
+    raw = (
+        '```json { "title": "Tiered Constraint Architecture", '
+        '"summary": "Fintech agents need deterministic controls.", '
+        '"content": "Use policy gates, sandboxing, and approval boundaries.", '
+        '"recommended_action": "create_node", "node_type": "synthesis", '
+        '"confidence": 0.74'
+    )
+
+    candidate = _candidate_from_raw("AB", {}, raw)
+
+    assert candidate["title"] == "Tiered Constraint Architecture"
+    assert candidate["summary"] == "Fintech agents need deterministic controls."
+    assert candidate["content"] == "Use policy gates, sandboxing, and approval boundaries."
+    assert candidate["recommended_action"] == "create_node"
+    assert candidate["node_type"] == "synthesis"
+    assert candidate["confidence"] == 0.74

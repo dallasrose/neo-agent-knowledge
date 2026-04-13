@@ -96,6 +96,34 @@ neo mcp-config
 Neo starts when the agent launches the MCP server. No separate daemon is
 required for stdio mode.
 
+Shared Neo settings such as the database, LLM, search keys, and discovery
+configuration should live in Neo's own config file, not in the agent platform:
+
+```bash
+mkdir -p ~/.neo
+$EDITOR ~/.neo/.env
+```
+
+Use `neo config-path` to print the exact file Neo reads.
+
+Multiple agents can share the same Neo database/network. Each agent identity
+gets its own root node inside that shared graph. If the launching platform needs
+a distinct identity, pass a non-secret `--agent-name`:
+
+```json
+{
+  "mcpServers": {
+    "neo": {
+      "command": "neo",
+      "args": ["serve", "--agent-name", "hermes"]
+    }
+  }
+}
+```
+
+If no agent name is provided, Neo uses `NEO_AGENT_NAME` from config or
+`default`.
+
 ## Using Neo From An Agent
 
 Neo exposes a small MCP tool surface for durable knowledge:
@@ -129,6 +157,9 @@ new integrations should prefer `create_node`.
 
 Neo works without API keys. By default it uses SQLite and deterministic fallback
 embeddings so you can install it, initialize it, and connect an agent locally.
+Configuration is loaded from environment variables first, then a local `.env`,
+then `~/.neo/.env`. Put shared production settings in `~/.neo/.env`; use a
+repo-local `.env` only for development.
 
 Useful environment variables:
 

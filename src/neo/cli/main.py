@@ -1,6 +1,6 @@
 import click
 
-from neo.config import settings
+from neo.config import get_config_env_path, set_runtime_agent_name, settings
 from neo.core.consolidation import ConsolidationEngine
 from neo.db import init_db
 from neo.mcp.server import mcp
@@ -17,7 +17,7 @@ def cli() -> None:
 @cli.command("mcp-config")
 @click.option("--name", default="neo", show_default=True, help="MCP server name.")
 @click.option("--command", default="neo", show_default=True, help="Command used by the agent host.")
-@click.option("--agent-name", default=None, help="Optional NEO_AGENT_NAME value.")
+@click.option("--agent-name", default=None, help="Optional agent identity for a shared Neo network.")
 def mcp_config(name: str, command: str, agent_name: str | None) -> None:
     """Print a ready-to-paste MCP stdio server config."""
     import json
@@ -27,15 +27,18 @@ def mcp_config(name: str, command: str, agent_name: str | None) -> None:
         "args": ["serve"],
     }
     if agent_name:
-        server["env"] = {"NEO_AGENT_NAME": agent_name}
+        server["args"] = ["serve", "--agent-name", agent_name]
 
     click.echo(json.dumps({"mcpServers": {name: server}}, indent=2))
 
 
 @cli.command()
-def init() -> None:
+@click.option("--agent-name", default=None, help="Optional agent identity to initialize.")
+def init(agent_name: str | None) -> None:
     """Initialize the Neo database."""
     import asyncio
+
+    set_runtime_agent_name(agent_name)
 
     async def _run() -> None:
         await init_db()
@@ -56,7 +59,8 @@ def init() -> None:
 )
 @click.option("--host", default=None, help="Bind host for HTTP transport (overrides NEO_MCP_HOST).")
 @click.option("--port", default=None, type=int, help="Bind port for HTTP transport (overrides NEO_MCP_PORT).")
-def serve(transport: str, host: str | None, port: int | None) -> None:
+@click.option("--agent-name", default=None, help="Optional agent identity for a shared Neo network.")
+def serve(transport: str, host: str | None, port: int | None, agent_name: str | None) -> None:
     """Start the MCP server.
 
     Use --transport http to expose Neo as a remote MCP endpoint compatible with
@@ -64,6 +68,8 @@ def serve(transport: str, host: str | None, port: int | None) -> None:
     by setting NEO_MCP_API_KEY; requests must then include an
     X-Neo-Api-Key header matching that value.
     """
+    set_runtime_agent_name(agent_name)
+
     if transport == "stdio":
         mcp.run()
         return
@@ -104,11 +110,19 @@ def serve(transport: str, host: str | None, port: int | None) -> None:
 @cli.command("serve-rest")
 @click.option("--host", default=settings.rest_host, show_default=True)
 @click.option("--port", default=settings.rest_port, type=int, show_default=True)
-def serve_rest(host: str, port: int) -> None:
+@click.option("--agent-name", default=None, help="Optional agent identity for the visualizer/API.")
+def serve_rest(host: str, port: int, agent_name: str | None) -> None:
     """Start the REST server."""
     import uvicorn
 
+    set_runtime_agent_name(agent_name)
     uvicorn.run(rest_app, host=host, port=port)
+
+
+@cli.command("config-path")
+def config_path() -> None:
+    """Print Neo's user-level config file path."""
+    click.echo(str(get_config_env_path()))
 
 
 @cli.command()

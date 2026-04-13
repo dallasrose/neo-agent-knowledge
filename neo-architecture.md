@@ -21,7 +21,7 @@ Neo/
     neo/
       __init__.py                # Package version
       enums.py                   # NodeType, EdgeType, SparkType, SparkStatus, SourceType
-      config.py                  # Pydantic settings (env vars, .env, nested config)
+      config.py                  # Pydantic settings (env vars, ~/.neo/.env, local .env)
       db.py                      # Engine, session factory, Base, init_db()
       models.py                  # SQLAlchemy ORM: NeoAgent, NeoNode, NeoEdge, optional NeoSource, NeoSpark
 
@@ -453,6 +453,19 @@ NEO_LOG_LEVEL                  default: INFO
 ```
 
 Per-agent overrides stored in `NeoAgent.config` JSON field.
+
+Config precedence:
+
+1. Process environment variables
+2. Local checkout `.env`
+3. User-level `~/.neo/.env`
+4. Built-in defaults
+
+Shared settings such as database, LLM, search, and discovery belong in
+`~/.neo/.env`. Agent identity is non-secret and can be supplied with
+`NEO_AGENT_NAME` or a launch argument such as `neo serve --agent-name hermes`.
+Multiple agent identities share the same Neo network/database while retaining
+separate root nodes.
 
 ---
 

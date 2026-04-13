@@ -369,6 +369,28 @@ sensitive and is best run on a strong instruction model.
 
 **Connect:** add `neo serve` to the agent's MCP server config. Neo starts automatically on first tool call.
 
+Shared Neo runtime settings live in Neo-owned config, not in agent-platform
+config:
+
+```
+~/.neo/.env
+```
+
+Environment variables override file config. Local checkout `.env` overrides
+`~/.neo/.env` for development.
+
+Multiple agents can share the same Neo database/network. Each agent identity
+gets its own root node inside the shared graph. Agent identity can come from
+`NEO_AGENT_NAME` or a non-secret launch argument:
+
+```
+neo serve --agent-name hermes
+neo serve --agent-name claude
+```
+
+Agent-platform config should normally contain only command/args, not Neo
+database, model, or API key settings.
+
 **System prompt / SOUL.md:** one instruction does the work:
 
 > Before researching a topic or answering a knowledge-heavy question, call `search_knowledge` on Neo first.

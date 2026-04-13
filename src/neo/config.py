@@ -4,16 +4,18 @@ from pathlib import Path
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Default DB lives in ~/.neo/ so it's consistent regardless of
-# which directory neo serve is called from.
-_DEFAULT_DB = Path.home() / ".neo" / "neo.db"
-_DEFAULT_DB.parent.mkdir(parents=True, exist_ok=True)
+# Default Neo state lives in ~/.neo/ so it is consistent regardless of which
+# agent host launches Neo or which directory neo serve is called from.
+_DEFAULT_CONFIG_DIR = Path.home() / ".neo"
+_DEFAULT_DB = _DEFAULT_CONFIG_DIR / "neo.db"
+_DEFAULT_ENV = _DEFAULT_CONFIG_DIR / ".env"
+_DEFAULT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="NEO_",
-        env_file=".env",
+        env_file=(_DEFAULT_ENV, ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -147,6 +149,19 @@ class Settings(BaseSettings):
         if not 1 <= value <= 65535:
             raise ValueError("rest_port must be between 1 and 65535")
         return value
+
+
+def get_config_dir() -> Path:
+    return _DEFAULT_CONFIG_DIR
+
+
+def get_config_env_path() -> Path:
+    return _DEFAULT_ENV
+
+
+def set_runtime_agent_name(agent_name: str | None) -> None:
+    if agent_name:
+        settings.agent_name = agent_name
 
 
 @lru_cache(maxsize=1)

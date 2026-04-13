@@ -235,10 +235,13 @@ From a checkout:
 
 ```bash
 uv sync --extra dev
-uv run neo init
+uv run neo setup --provider ollama --model llama3.2 --non-interactive
 uv run neo status
-uv run neo serve
+uv run neo
 ```
+
+Use `uv run neo serve --agent-name hermes` when testing Neo as a local stdio
+MCP server from an agent.
 
 Run tests:
 

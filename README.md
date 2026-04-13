@@ -67,22 +67,28 @@ neo setup --provider ollama --model llama3.2 --non-interactive
 not create or configure an agent node; the agent does that for itself when it
 connects.
 
-Start the MCP server over stdio:
+Launch the local REST API and visualizer:
+
+```bash
+neo
+```
+
+This runs from Neo's user directory (`~/.neo`) and serves:
+
+```text
+http://127.0.0.1:8420
+```
+
+Start the MCP server over stdio for an agent host:
 
 ```bash
 neo serve
 ```
 
-Start the REST API and visualizer:
+`neo serve-rest` is still available as an explicit alias for the visualizer/API:
 
 ```bash
 neo serve-rest
-```
-
-Then open:
-
-```text
-http://127.0.0.1:8420
 ```
 
 ## Agent Setup

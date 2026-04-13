@@ -219,7 +219,7 @@ Resolution actions:
 
 ## 7. MCP Interface
 
-Neo exposes a stdio MCP server (`neo serve`). Spawned on-demand by the agent framework as a subprocess — no persistent daemon, no separate service to manage.
+Neo exposes a stdio MCP server (`neo serve`). Spawned on-demand by the agent framework as a subprocess — no persistent daemon, no separate service to manage. Running `neo` without a subcommand starts the local REST visualiser/API from `~/.neo`.
 
 ### Tools
 
@@ -448,7 +448,7 @@ This is the weakest link in the system — instruction following degrades with c
 MCP server. SQLite backend. Contemplation loop. Consolidation. Spark lifecycle. REST API. Install tiers.
 
 **v1.5 — Visualiser**
-Neo ships with the visualiser. Full graph view, tree panel, spark panel, filter bar. Runs alongside `neo serve`.
+Neo ships with the visualiser. Full graph view, tree panel, spark panel, filter bar. Run it with `neo` or `neo serve-rest`; MCP stdio remains `neo serve`.
 
 **v2 — Quality**
 Confidence-weighted consolidation. Near-duplicate detection. NeoLang enforcement. Source concentration warnings. Better spark prioritisation.

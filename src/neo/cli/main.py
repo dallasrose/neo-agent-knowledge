@@ -1,6 +1,7 @@
 import click
 
 from neo.config import (
+    get_config_dir,
     get_config_env_path,
     read_env_file,
     set_runtime_agent_name,
@@ -15,9 +16,25 @@ from neo.runtime import ensure_default_agent
 from neo.store import create_store
 
 
-@click.group()
-def cli() -> None:
-    """Neo CLI."""
+def _serve_rest(host: str, port: int, agent_name: str | None) -> None:
+    """Run the visualizer/API from Neo's user state directory."""
+    import os
+    import uvicorn
+
+    set_runtime_agent_name(agent_name)
+    os.chdir(get_config_dir())
+    uvicorn.run(rest_app, host=host, port=port)
+
+
+@click.group(invoke_without_command=True)
+@click.pass_context
+def cli(ctx: click.Context) -> None:
+    """Neo CLI.
+
+    Running `neo` without a subcommand starts the local visualizer/API.
+    """
+    if ctx.invoked_subcommand is None:
+        _serve_rest(settings.rest_host, settings.rest_port, None)
 
 
 @cli.command()
@@ -231,10 +248,7 @@ def serve(transport: str, host: str | None, port: int | None, agent_name: str | 
 @click.option("--agent-name", default=None, help="Optional agent identity for the visualizer/API.")
 def serve_rest(host: str, port: int, agent_name: str | None) -> None:
     """Start the REST server."""
-    import uvicorn
-
-    set_runtime_agent_name(agent_name)
-    uvicorn.run(rest_app, host=host, port=port)
+    _serve_rest(host, port, agent_name)
 
 
 @cli.command("config-path")

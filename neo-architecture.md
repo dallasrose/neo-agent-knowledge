@@ -56,7 +56,7 @@ Neo/
 
       cli/
         __init__.py
-        main.py                  # CLI: setup, init, serve, serve-rest, consolidate
+        main.py                  # CLI: setup, default visualizer, serve, consolidate
 
   migrations/
     env.py                       # Alembic env (Postgres only)
@@ -600,8 +600,8 @@ Rules for the implementing agent:
 3. **RUN**: `uv run pytest tests/test_mcp_server.py -v`
 4. Create `src/neo/rest/__init__.py`, `src/neo/rest/app.py`, `src/neo/rest/routes.py`
 5. Create `src/neo/cli/__init__.py`, `src/neo/cli/main.py`
-6. **SMOKE TEST**: Start MCP server (`uv run python -m neo.mcp.server`), verify it launches without errors
-7. **SMOKE TEST**: Start REST server, hit `/api/health`, verify 200 response
+6. **SMOKE TEST**: Start MCP server (`uv run neo serve`), verify it launches without errors
+7. **SMOKE TEST**: Start REST server (`uv run neo`), hit `/api/health`, verify 200 response
 8. **RUN**: `uv run pytest tests/ -v` — full suite
 
 ### Phase 5: Background Systems
@@ -642,7 +642,7 @@ After all phases:
 3. `uv run neo serve` — starts MCP server (stdio transport)
 4. Connect Claude Code to Neo MCP server, call `find_node_by_title`, `get_node`, `get_branch`, `create_node`, `update_node`, `search_knowledge`, `get_sparks`
 5. `uv run neo consolidate` — runs consolidation pass
-6. `uv run neo serve-rest` — REST API accessible at `localhost:8420/api/health`
+6. `uv run neo` — REST API accessible at `localhost:8420/api/health`
 
 ---
 

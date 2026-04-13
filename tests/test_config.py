@@ -55,3 +55,13 @@ def test_setup_configures_neo_without_agent_identity(tmp_path, monkeypatch) -> N
     assert "NEO_LLM_BASE_URL=http://127.0.0.1:11434/v1" in content
     assert "NEO_AGENT_NAME" not in content
     assert "No agent node was created" in result.output
+
+
+def test_default_cli_launches_visualizer(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr("neo.cli.main._serve_rest", lambda host, port, agent_name: calls.append((host, port, agent_name)))
+
+    result = CliRunner().invoke(cli, [])
+
+    assert result.exit_code == 0
+    assert calls == [("127.0.0.1", 8420, None)]

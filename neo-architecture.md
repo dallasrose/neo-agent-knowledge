@@ -297,6 +297,26 @@ Returns `{nodes: [...], edges: [...], contradictions: [...], sparks: [...], tota
 The MCP tool and `ResolutionScheduler` call the same resolver. Trigger metadata
 changes; the process does not.
 
+Spark-type framing is explicit:
+
+- `contradiction`: A and B defend different claims/readings; AB reconciles,
+  chooses, or preserves uncertainty.
+- `open_question`: A and B answer from distinct evidence-backed perspectives;
+  AB synthesizes the best current answer and remaining uncertainty.
+- `weak_edge`: A argues the relationship is useful; B argues it is weak,
+  indirect, misleading, or mistyped; AB decides graph treatment.
+- `isolated_node`: A argues the strongest placement; B argues an alternative or
+  no integration; AB decides whether to store, link, update, or close.
+- `thin_domain`: A proposes the highest-value missing knowledge; B proposes an
+  alternative or argues the gap is low value; AB decides the durable action.
+
+Candidate actions:
+
+- `create_node`: store a new durable finding/theory/synthesis.
+- `update_target`: update the target node with the resolved insight.
+- `resolve_no_change`: close the spark because existing knowledge is sufficient.
+- `abandon`: close the spark as a false positive or low-value question.
+
 ### 10. `resolve_spark` → `NeoAPI.resolve_spark()`
 1. Validate spark is active, all produced node IDs exist
 2. `store.resolve_spark(spark_id, node_ids, notes, metadata)`

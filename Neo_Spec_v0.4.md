@@ -194,6 +194,27 @@ agents argue spark-type-specific interpretations or resolution paths. Resolved
 sparks leave the active queue and are counted against the node they resolved
 into, making that node stronger and more gold in the visualiser.
 
+Spark-type framing:
+
+- `contradiction`: candidate agents defend different claims or readings; the
+  synthesis reconciles, chooses, or preserves uncertainty.
+- `open_question`: candidate agents answer from distinct evidence-backed
+  perspectives; the synthesis gives the best current answer and remaining
+  uncertainty.
+- `weak_edge`: one candidate argues the connection is useful; another argues it
+  is weak, indirect, or mistyped; the synthesis decides the graph treatment.
+- `isolated_node`: candidates argue alternative placements or whether the node
+  should remain isolated; the synthesis decides integration.
+- `thin_domain`: candidates propose the highest-value missing knowledge or argue
+  the gap is not worth filling yet; the synthesis decides.
+
+Resolution actions:
+
+- `create_node`: store a new durable finding, theory, or synthesis.
+- `update_target`: update the target node with the resolved insight.
+- `resolve_no_change`: close the spark because existing knowledge is sufficient.
+- `abandon`: close the spark as a false positive or low-value question.
+
 ---
 
 ## 7. MCP Interface

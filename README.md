@@ -7,6 +7,9 @@ Neo is not chat history. It stores what an agent has learned: concepts,
 findings, theories, syntheses, and the relationships between them. Any agent
 that can launch an MCP stdio server can use it.
 
+See [`SPEC.md`](SPEC.md) for the product specification and
+[`neo-architecture.md`](neo-architecture.md) for implementation architecture.
+
 ## Status
 
 Neo is early alpha. The local install, MCP server, REST API, and visualizer work,

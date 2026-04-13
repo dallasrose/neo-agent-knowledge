@@ -653,4 +653,4 @@ After all phases:
 - **Embedding client**: OpenAI-compatible embeddings with fallback support
 - **Cron scheduler**: async polling scheduler with bounded background tasks
 - **Alembic migrations**: standard async SQLAlchemy migration environment
-- **Full spec**: `Neo_Spec_v0.3.md`
+- **Full spec**: `SPEC.md`

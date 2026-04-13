@@ -131,8 +131,8 @@ class NeoLLMClient:
             import anthropic
         except ImportError as exc:
             raise RuntimeError(
-                "Anthropic-compatible LLMs require the 'anthropic' package. "
-                "Install with: pip install 'neo-agent-knowledge[sparks]'"
+                "Anthropic-compatible LLMs require the 'anthropic' package, which is "
+                "included by default. Reinstall or upgrade neo-agent-knowledge."
             ) from exc
 
         if self._anthropic_client is None:

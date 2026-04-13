@@ -97,15 +97,15 @@ class YouTubeTranscriptFetcher:
         """Return {"text": str, "language": str, "duration_seconds": float | None}.
 
         Raises RuntimeError if no transcript is available.
-        Requires: youtube-transcript-api (optional dep, neo-agent-knowledge[sparks]).
+        Requires: youtube-transcript-api, included by default.
         """
         try:
             from youtube_transcript_api import YouTubeTranscriptApi
             from youtube_transcript_api._errors import NoTranscriptFound, TranscriptsDisabled
         except ImportError:
             raise RuntimeError(
-                "youtube-transcript-api is not installed. "
-                "Install with: pip install 'neo-agent-knowledge[sparks]'"
+                "youtube-transcript-api is not installed. Reinstall or upgrade "
+                "neo-agent-knowledge; it is included by default."
             )
 
         langs = languages or ["en", "en-US", "en-GB"]

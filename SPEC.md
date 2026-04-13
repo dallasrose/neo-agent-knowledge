@@ -323,37 +323,25 @@ spark       #fbbf24   amber — potential energy
 
 ---
 
-## 11. Installation Tiers
+## 11. Installation
 
 ```
 pip install neo-agent-knowledge SQLite + MCP + REST + visualiser
-                                mock embeddings (hash-based, no API key)
-                                spark generation with OpenAI-compatible LLMs
-                                when NEO_LLM_* is configured
-                                fully functional, reduced search quality
-
-pip install neo-agent-knowledge[embeddings]
-                                adds openai SDK
-                                real semantic search via any OpenAI-compatible
-                                embedding endpoint
-                                set NEO_EMBEDDING_API_KEY
-
-pip install neo-agent-knowledge[sparks]
-                                adds anthropic SDK
-                                Anthropic-compatible endpoints and
+                                OpenAI-compatible embeddings
+                                Anthropic-compatible LLMs
+                                OpenAI-compatible/local LLM servers
+                                spark generation and resolution
                                 YouTube transcript ingestion
-                                set NEO_LLM_PROVIDER=anthropic
+                                mock embeddings when no API key is set
 
 pip install neo-agent-knowledge[postgres]
                                 adds psycopg + pgvector
                                 production-scale storage backend
                                 set NEO_DATABASE_URL
-
-pip install neo-agent-knowledge[all]
-                                everything
 ```
 
-Zero-config minimum works out of the box. Each capability unlocks with one env var.
+Zero-config minimum works out of the box. Cloud/local model capabilities unlock
+with Neo config, not extra Python installs.
 
 `neo setup` is the first-run command. It configures Neo's machine-level
 settings, creates `~/.neo/.env` when needed, initializes database schema, and

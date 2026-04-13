@@ -916,7 +916,7 @@ async def ingest_youtube(
     try:
         from neo.core.youtube import get_fetcher, extract_video_id, is_youtube_url
     except ImportError:
-        return json.dumps({"error": "youtube-transcript-api not installed. Run: pip install 'neo-agent-knowledge[sparks]'"})
+        return json.dumps({"error": "youtube-transcript-api not installed. Reinstall or upgrade neo-agent-knowledge."})
 
     if not is_youtube_url(url):
         return json.dumps({"error": f"Not a recognised YouTube URL: {url}"})

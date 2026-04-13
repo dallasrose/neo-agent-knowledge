@@ -28,16 +28,14 @@ Install from GitHub:
 uv tool install 'neo-agent-knowledge @ git+https://github.com/dallasrose/neo-agent-knowledge.git'
 ```
 
-Install with stronger embeddings:
+That includes SQLite, MCP, REST, the visualizer, OpenAI-compatible embeddings,
+Anthropic-compatible LLMs, local OpenAI-compatible LLM servers, spark
+resolution, and YouTube transcript ingestion.
+
+Install with PostgreSQL support:
 
 ```bash
-uv tool install 'neo-agent-knowledge[embeddings] @ git+https://github.com/dallasrose/neo-agent-knowledge.git'
-```
-
-Install with all optional integrations:
-
-```bash
-uv tool install 'neo-agent-knowledge[all] @ git+https://github.com/dallasrose/neo-agent-knowledge.git'
+uv tool install 'neo-agent-knowledge[postgres] @ git+https://github.com/dallasrose/neo-agent-knowledge.git'
 ```
 
 The installed command is `neo`.
@@ -222,11 +220,8 @@ model.
 Install tiers:
 
 ```bash
-pip install neo-agent-knowledge              # SQLite + MCP + REST + visualizer
-pip install neo-agent-knowledge[embeddings]  # OpenAI-compatible embeddings
-pip install neo-agent-knowledge[sparks]      # Anthropic SDK + YouTube transcripts
-pip install neo-agent-knowledge[postgres]    # PostgreSQL + pgvector
-pip install neo-agent-knowledge[all]         # all optional integrations
+pip install neo-agent-knowledge            # SQLite + MCP + REST + visualizer + LLMs + YouTube
+pip install neo-agent-knowledge[postgres]  # PostgreSQL + pgvector
 ```
 
 ## Local Development

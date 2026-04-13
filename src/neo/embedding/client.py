@@ -27,8 +27,8 @@ class EmbeddingClient:
                 from openai import AsyncOpenAI
             except ImportError as exc:
                 raise RuntimeError(
-                    "OpenAI embeddings require the optional embeddings extra. "
-                    "Install with: pip install 'neo-agent-knowledge[embeddings]'"
+                    "OpenAI embeddings require the 'openai' package, which is included "
+                    "by default. Reinstall or upgrade neo-agent-knowledge."
                 ) from exc
             self._client = AsyncOpenAI(api_key=self.api_key)
 

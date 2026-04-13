@@ -1190,27 +1190,27 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
+    { name = "anthropic" },
     { name = "click" },
     { name = "croniter" },
     { name = "fastapi", extra = ["standard"] },
     { name = "fastmcp" },
     { name = "httpx" },
+    { name = "openai" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "sqlite-vec" },
     { name = "tiktoken" },
+    { name = "youtube-transcript-api" },
 ]
 
 [package.optional-dependencies]
 all = [
     { name = "alembic" },
-    { name = "anthropic" },
-    { name = "openai" },
     { name = "pgvector" },
     { name = "psycopg", extra = ["binary"] },
-    { name = "youtube-transcript-api" },
 ]
 dev = [
     { name = "pytest" },
@@ -1235,14 +1235,14 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20.0" },
     { name = "alembic", marker = "extra == 'all'", specifier = ">=1.13" },
     { name = "alembic", marker = "extra == 'postgres'", specifier = ">=1.13" },
-    { name = "anthropic", marker = "extra == 'all'", specifier = ">=0.49" },
+    { name = "anthropic", specifier = ">=0.49" },
     { name = "anthropic", marker = "extra == 'sparks'", specifier = ">=0.49" },
     { name = "click", specifier = ">=8.1" },
     { name = "croniter", specifier = ">=6.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.115" },
     { name = "fastmcp", specifier = ">=2.0" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "openai", marker = "extra == 'all'", specifier = ">=1.30" },
+    { name = "openai", specifier = ">=1.30" },
     { name = "openai", marker = "extra == 'embeddings'", specifier = ">=1.30" },
     { name = "pgvector", marker = "extra == 'all'", specifier = ">=0.2.5" },
     { name = "pgvector", marker = "extra == 'postgres'", specifier = ">=0.2.5" },
@@ -1257,7 +1257,7 @@ requires-dist = [
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.30" },
     { name = "sqlite-vec", specifier = ">=0.1" },
     { name = "tiktoken", specifier = ">=0.7" },
-    { name = "youtube-transcript-api", marker = "extra == 'all'", specifier = ">=0.6" },
+    { name = "youtube-transcript-api", specifier = ">=0.6" },
     { name = "youtube-transcript-api", marker = "extra == 'sparks'", specifier = ">=0.6" },
 ]
 provides-extras = ["embeddings", "sparks", "postgres", "all", "dev"]

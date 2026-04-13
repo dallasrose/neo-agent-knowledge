@@ -100,8 +100,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-embeddings = ["openai>=1.30"]
-sparks = ["anthropic>=0.49", "youtube-transcript-api>=0.6"]
 postgres = ["psycopg[binary]>=3.1", "pgvector>=0.2.5", "alembic>=1.13"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-cov>=5.0"]
 

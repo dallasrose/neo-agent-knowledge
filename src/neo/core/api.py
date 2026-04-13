@@ -474,14 +474,15 @@ class NeoAPI:
                     WebSearchClient(settings.search_provider, settings.search_api_key)
                 )
 
-            res_key = settings.llm_resolution_api_key or settings.llm_spark_api_key
+            res_key = settings.llm_api_key_for("resolution")
             llm = None
-            if res_key:
+            if settings.llm_configured_for("resolution"):
                 from neo.core.resolver import ResolutionLLM
                 llm = ResolutionLLM(
                     api_key=res_key,
-                    model=settings.llm_resolution_model or settings.llm_spark_model,
-                    base_url=settings.llm_resolution_base_url or settings.llm_spark_base_url,
+                    model=settings.llm_model_for("resolution"),
+                    base_url=settings.llm_base_url_for("resolution"),
+                    provider=settings.llm_provider_for("resolution"),
                 )
 
             job = DiscoveryJob(self, llm=llm, yt_search=yt_search)

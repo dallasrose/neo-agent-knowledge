@@ -30,9 +30,18 @@ class Settings(BaseSettings):
     embedding_dimensions: int = 1536
     embedding_fallback_enabled: bool = True
 
+    # General LLM defaults used by spark generation, resolution, and discovery
+    # unless a task-specific override below is set.
+    llm_provider: str = "anthropic"
+    llm_model: str = ""
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+
+    llm_spark_provider: str = ""
     llm_spark_model: str = "claude-haiku-4-5"
     llm_spark_api_key: str | None = None
     llm_spark_base_url: str | None = None  # Custom base URL (e.g. MiniMax Anthropic-compat endpoint)
+    llm_consolidation_provider: str = ""
     llm_consolidation_model: str = "claude-sonnet-4-20250514"
     llm_consolidation_api_key: str | None = None
     llm_consolidation_base_url: str | None = None
@@ -71,6 +80,7 @@ class Settings(BaseSettings):
     resolution_batch_size: int = 3
 
     # LLM for resolution (defaults to spark LLM if not set)
+    llm_resolution_provider: str = ""
     llm_resolution_model: str = ""
     llm_resolution_api_key: str | None = None
     llm_resolution_base_url: str | None = None
@@ -92,6 +102,44 @@ class Settings(BaseSettings):
         if value not in supported:
             raise ValueError(f"embedding_provider must be one of {sorted(supported)}")
         return value
+
+    def llm_provider_for(self, task: str) -> str:
+        override = getattr(self, f"llm_{task}_provider", "") or ""
+        return override or self.llm_provider
+
+    def llm_model_for(self, task: str) -> str:
+        override = getattr(self, f"llm_{task}_model", "") or ""
+        return override or self.llm_model or self.llm_spark_model
+
+    def llm_api_key_for(self, task: str) -> str | None:
+        override = getattr(self, f"llm_{task}_api_key", None)
+        if override:
+            return override
+        return self.llm_api_key or self.llm_spark_api_key
+
+    def llm_base_url_for(self, task: str) -> str | None:
+        override = getattr(self, f"llm_{task}_base_url", None)
+        if override:
+            return override
+        return self.llm_base_url or self.llm_spark_base_url
+
+    def llm_configured_for(self, task: str) -> bool:
+        provider = self.llm_provider_for(task).strip().lower()
+        model = self.llm_model_for(task)
+        if not model:
+            return False
+        if self.llm_api_key_for(task):
+            return True
+        if provider in {"ollama", "lmstudio", "lm-studio"}:
+            return True
+        openai_local = {
+            "openai",
+            "openai-compatible",
+            "openai_compatible",
+            "vllm",
+            "llama.cpp",
+        }
+        return provider in openai_local and bool(self.llm_base_url_for(task))
 
     @field_validator("rest_port")
     @classmethod

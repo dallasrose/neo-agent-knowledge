@@ -16,11 +16,12 @@ _hierarchy_ensured: bool = False
 
 
 def _build_spark_generator(store) -> SparkGenerator:
-    if settings.llm_spark_api_key:
+    if settings.llm_configured_for("spark"):
         llm = AnthropicSparkLLM(
-            api_key=settings.llm_spark_api_key,
-            model=settings.llm_spark_model,
-            base_url=settings.llm_spark_base_url,
+            api_key=settings.llm_api_key_for("spark"),
+            model=settings.llm_model_for("spark"),
+            base_url=settings.llm_base_url_for("spark"),
+            provider=settings.llm_provider_for("spark"),
         )
     else:
         llm = NullSparkLLM()

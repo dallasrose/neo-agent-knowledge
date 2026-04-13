@@ -39,6 +39,7 @@ Neo/
         __init__.py
         api.py                   # NeoAPI — the Python API (9 methods + internals)
         assembler.py             # Working Memory Assembly pipeline
+        llm.py                   # Anthropic/OpenAI-compatible LLM normalization
         sparks.py                # Research Drive: spark generation + priority scoring
         consolidation.py         # Memory Consolidation engine (two-pass)
         scheduler.py             # Background consolidation scheduler
@@ -434,10 +435,16 @@ NEO_EMBEDDING_PROVIDER         default: openai
 NEO_EMBEDDING_API_KEY          required for real embeddings
 NEO_EMBEDDING_MODEL            default: text-embedding-3-small
 NEO_EMBEDDING_DIMENSIONS       default: 1536
-NEO_LLM_SPARK_MODEL            default: claude-haiku-4-5
-NEO_LLM_SPARK_API_KEY          required for spark generation
-NEO_LLM_CONSOLIDATION_MODEL    default: claude-sonnet-4-20250514
-NEO_LLM_CONSOLIDATION_API_KEY  required for consolidation
+NEO_LLM_PROVIDER               default: anthropic
+                                supported: anthropic, minimax, openai,
+                                openai-compatible, openrouter, ollama,
+                                lmstudio, vllm, llama.cpp
+NEO_LLM_MODEL                  shared LLM model
+NEO_LLM_BASE_URL               shared endpoint
+NEO_LLM_API_KEY                shared API key
+NEO_LLM_SPARK_*                optional spark-generation overrides
+NEO_LLM_RESOLUTION_*           optional spark-resolution overrides
+NEO_LLM_CONSOLIDATION_*        optional consolidation overrides
 NEO_CONSOLIDATION_SCHEDULE     default: 0 */6 * * *
 NEO_CONSOLIDATION_NODE_THRESHOLD default: 20
 NEO_CONSOLIDATION_ENABLED      default: true

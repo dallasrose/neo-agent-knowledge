@@ -136,18 +136,50 @@ Useful environment variables:
 NEO_DATABASE_URL=sqlite+aiosqlite:////Users/you/.neo/neo.db
 NEO_AGENT_NAME=hermes
 NEO_EMBEDDING_API_KEY=...
-NEO_LLM_SPARK_API_KEY=...
-NEO_LLM_CONSOLIDATION_API_KEY=...
+NEO_LLM_PROVIDER=openai
+NEO_LLM_MODEL=gpt-4.1-mini
+NEO_LLM_BASE_URL=https://api.openai.com/v1
+NEO_LLM_API_KEY=...
 ```
 
 `NEO_DB_CONNECTION_URI` is also supported for existing installations.
+
+Neo has one simple LLM configuration block. Task-specific values override it
+when set: `NEO_LLM_SPARK_*`, `NEO_LLM_RESOLUTION_*`, and
+`NEO_LLM_CONSOLIDATION_*`.
+
+Supported LLM providers:
+
+```bash
+# OpenAI cloud
+NEO_LLM_PROVIDER=openai
+NEO_LLM_MODEL=gpt-4.1-mini
+NEO_LLM_BASE_URL=https://api.openai.com/v1
+NEO_LLM_API_KEY=...
+
+# Local Ollama, LM Studio, vLLM, llama.cpp, or another OpenAI-compatible server
+NEO_LLM_PROVIDER=ollama
+NEO_LLM_MODEL=llama3.2
+# NEO_LLM_BASE_URL defaults to http://127.0.0.1:11434/v1 for Ollama
+
+# Anthropic-compatible cloud endpoints such as Claude or MiniMax
+NEO_LLM_PROVIDER=anthropic
+NEO_LLM_MODEL=claude-haiku-4-5
+NEO_LLM_API_KEY=...
+```
+
+Spark generation and spark resolution ask models for strict JSON and tolerate
+common wrapping such as Markdown fences or surrounding prose. Small local models
+can work for simple spark generation, but autonomous spark resolution is a
+judged debate/synthesis workflow and benefits from a stronger instruction
+model.
 
 Install tiers:
 
 ```bash
 pip install neo-agent-knowledge              # SQLite + MCP + REST + visualizer
 pip install neo-agent-knowledge[embeddings]  # OpenAI-compatible embeddings
-pip install neo-agent-knowledge[sparks]      # spark LLM + YouTube transcripts
+pip install neo-agent-knowledge[sparks]      # Anthropic SDK + YouTube transcripts
 pip install neo-agent-knowledge[postgres]    # PostgreSQL + pgvector
 pip install neo-agent-knowledge[all]         # all optional integrations
 ```

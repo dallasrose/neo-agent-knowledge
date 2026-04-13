@@ -54,13 +54,19 @@ async def lifespan(app: FastAPI):
                 WebSearchClient(settings.search_provider, settings.search_api_key)
             )
 
-        res_key   = settings.llm_resolution_api_key or settings.llm_spark_api_key
-        res_model = settings.llm_resolution_model or settings.llm_spark_model
-        res_url   = settings.llm_resolution_base_url or settings.llm_spark_base_url
+        res_key = settings.llm_api_key_for("resolution")
+        res_model = settings.llm_model_for("resolution")
+        res_url = settings.llm_base_url_for("resolution")
+        res_provider = settings.llm_provider_for("resolution")
         discovery_llm = None
-        if res_key:
+        if settings.llm_configured_for("resolution"):
             from neo.core.resolver import ResolutionLLM
-            discovery_llm = ResolutionLLM(api_key=res_key, model=res_model, base_url=res_url)
+            discovery_llm = ResolutionLLM(
+                api_key=res_key,
+                model=res_model,
+                base_url=res_url,
+                provider=res_provider,
+            )
 
         discovery_sched = DiscoveryScheduler(
             api,

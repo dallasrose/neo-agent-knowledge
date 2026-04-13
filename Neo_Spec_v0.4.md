@@ -307,7 +307,8 @@ spark       #fbbf24   amber — potential energy
 ```
 pip install neo-agent-knowledge SQLite + MCP + REST + visualiser
                                 mock embeddings (hash-based, no API key)
-                                no spark generation
+                                spark generation with OpenAI-compatible LLMs
+                                when NEO_LLM_* is configured
                                 fully functional, reduced search quality
 
 pip install neo-agent-knowledge[embeddings]
@@ -318,9 +319,9 @@ pip install neo-agent-knowledge[embeddings]
 
 pip install neo-agent-knowledge[sparks]
                                 adds anthropic SDK
-                                auto spark generation via any
-                                Anthropic-compatible endpoint
-                                set NEO_LLM_SPARK_API_KEY
+                                Anthropic-compatible endpoints and
+                                YouTube transcript ingestion
+                                set NEO_LLM_PROVIDER=anthropic
 
 pip install neo-agent-knowledge[postgres]
                                 adds psycopg + pgvector
@@ -332,6 +333,35 @@ pip install neo-agent-knowledge[all]
 ```
 
 Zero-config minimum works out of the box. Each capability unlocks with one env var.
+
+LLM configuration:
+
+```
+NEO_LLM_PROVIDER              default: anthropic
+                              supported: anthropic, minimax, openai,
+                              openai-compatible, openrouter, ollama,
+                              lmstudio, vllm, llama.cpp
+NEO_LLM_MODEL                 shared LLM model
+NEO_LLM_BASE_URL              shared endpoint
+NEO_LLM_API_KEY               shared API key
+NEO_LLM_SPARK_*               optional spark overrides
+NEO_LLM_RESOLUTION_*          optional spark-resolution overrides
+NEO_LLM_CONSOLIDATION_*       optional consolidation overrides
+```
+
+OpenAI-compatible providers use Neo's required `httpx` dependency and do not
+require an SDK. Local Ollama example:
+
+```
+NEO_LLM_PROVIDER=ollama
+NEO_LLM_MODEL=llama3.2
+# NEO_LLM_BASE_URL defaults to http://127.0.0.1:11434/v1 for Ollama
+```
+
+Spark generation and resolution prompt for strict JSON and parse tolerated
+wrapping such as Markdown fences or surrounding prose. Local models are
+supported, but autonomous judged resolution should be treated as quality
+sensitive and is best run on a strong instruction model.
 
 ---
 

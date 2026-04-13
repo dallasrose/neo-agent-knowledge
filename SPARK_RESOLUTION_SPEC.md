@@ -57,6 +57,12 @@ Each candidate proposes one action:
 - MCP `resolve_spark` remains a manual closeout primitive for agents that do
   their own investigation.
 - MCP `abandon_spark` remains a manual false-positive closeout primitive.
+- The same pipeline runs on Anthropic-compatible or OpenAI-compatible LLM
+  endpoints through `NeoLLMClient`. Prompts request strict JSON; parsing
+  tolerates common wrappers such as Markdown fences and surrounding prose.
+- Local models are supported through OpenAI-compatible servers, but the judged
+  debate/synthesis workflow is quality-sensitive. Prefer a strong instruction
+  model for autonomous background resolution.
 
 ## Visualizer Rules
 

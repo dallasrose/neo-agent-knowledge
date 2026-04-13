@@ -138,25 +138,27 @@ def _vote_from_raw(raw: Any, judge_index: int) -> dict[str, Any] | None:
 
 
 class ResolutionLLM:
-    def __init__(self, api_key: str, model: str, base_url: str | None = None) -> None:
-        import anthropic
-        self._client = anthropic.AsyncAnthropic(api_key=api_key, base_url=base_url)
-        self._model = model
+    def __init__(
+        self,
+        api_key: str | None,
+        model: str,
+        base_url: str | None = None,
+        provider: str | None = None,
+    ) -> None:
+        from neo.core.llm import NeoLLMClient
+
+        self._client = NeoLLMClient(
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            provider=provider,
+        )
 
     async def call(self, prompt: str, max_tokens: int = 1024) -> str:
-        response = await asyncio.wait_for(
-            self._client.messages.create(
-                model=self._model,
-                max_tokens=max_tokens,
-                messages=[{"role": "user", "content": prompt}],
-            ),
-            timeout=60,
+        return await asyncio.wait_for(
+            self._client.call(prompt, max_tokens=max_tokens),
+            timeout=70,
         )
-        # Skip ThinkingBlocks — grab the first block that actually has text
-        text_block = next((b for b in response.content if hasattr(b, "text")), None)
-        if text_block is None:
-            raise ValueError("No text block in LLM response")
-        return text_block.text.strip()
 
 
 class SparkResolver:

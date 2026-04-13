@@ -22,12 +22,23 @@ class NullSparkLLM:
 
 
 class AnthropicSparkLLM:
-    """Real spark generator — works with Anthropic or any Anthropic-compatible endpoint (e.g. MiniMax)."""
+    """Real spark generator backed by Neo's provider-normalized LLM client."""
 
-    def __init__(self, api_key: str, model: str = "claude-haiku-4-5", base_url: str | None = None) -> None:
-        import anthropic
-        self._client = anthropic.AsyncAnthropic(api_key=api_key, base_url=base_url)
-        self._model = model
+    def __init__(
+        self,
+        api_key: str | None,
+        model: str = "claude-haiku-4-5",
+        base_url: str | None = None,
+        provider: str | None = None,
+    ) -> None:
+        from neo.core.llm import NeoLLMClient
+
+        self._client = NeoLLMClient(
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            provider=provider,
+        )
 
     async def generate(self, node: dict[str, Any], context: list[dict[str, Any]], agent_focus: str = "") -> list[dict[str, Any]]:
         node_type = node.get("node_type", "")
@@ -74,18 +85,10 @@ Respond with a JSON array only. Each item: {{"spark_type": "...", "description":
 Return [] if no meaningful sparks exist."""
 
         try:
-            response = await asyncio.wait_for(
-                self._client.messages.create(
-                    model=self._model,
-                    max_tokens=2048,
-                    messages=[{"role": "user", "content": prompt}],
-                ),
-                timeout=60.0,
+            raw = await asyncio.wait_for(
+                self._client.call(prompt, max_tokens=2048),
+                timeout=70.0,
             )
-            text_block = next((b for b in response.content if hasattr(b, "text")), None)
-            if text_block is None:
-                return []
-            raw = text_block.text.strip()
             # Strip markdown code fences if present
             if raw.startswith("```"):
                 raw = raw.split("```", 2)[1]

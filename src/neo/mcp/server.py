@@ -133,11 +133,12 @@ async def _lifespan(server: FastMCP):
             if settings.search_api_key
             else NullWebSearch()
         )
-        res_model = settings.llm_resolution_model or settings.llm_spark_model
-        res_key = settings.llm_resolution_api_key or settings.llm_spark_api_key
-        res_url = settings.llm_resolution_base_url or settings.llm_spark_base_url
-        if res_key:
-            resolution_llm = ResolutionLLM(api_key=res_key, model=res_model, base_url=res_url)
+        res_model = settings.llm_model_for("resolution")
+        res_key = settings.llm_api_key_for("resolution")
+        res_url = settings.llm_base_url_for("resolution")
+        res_provider = settings.llm_provider_for("resolution")
+        if settings.llm_configured_for("resolution"):
+            resolution_llm = ResolutionLLM(api_key=res_key, model=res_model, base_url=res_url, provider=res_provider)
             resolver = SparkResolver(api, resolution_llm, web_search)
             res_sched = ResolutionScheduler(
                 api, resolver, agent_id,
@@ -171,13 +172,14 @@ async def _lifespan(server: FastMCP):
                         "Set NEO_YOUTUBE_API_KEY or NEO_SEARCH_API_KEY to enable.")
 
         # Reuse the resolution LLM for query generation if available
-        res_model = settings.llm_resolution_model or settings.llm_spark_model
-        res_key   = settings.llm_resolution_api_key or settings.llm_spark_api_key
-        res_url   = settings.llm_resolution_base_url or settings.llm_spark_base_url
+        res_model = settings.llm_model_for("resolution")
+        res_key = settings.llm_api_key_for("resolution")
+        res_url = settings.llm_base_url_for("resolution")
+        res_provider = settings.llm_provider_for("resolution")
         discovery_llm = None
-        if res_key:
+        if settings.llm_configured_for("resolution"):
             from neo.core.resolver import ResolutionLLM
-            discovery_llm = ResolutionLLM(api_key=res_key, model=res_model, base_url=res_url)
+            discovery_llm = ResolutionLLM(api_key=res_key, model=res_model, base_url=res_url, provider=res_provider)
 
         discovery_job = DiscoveryJob(api, llm=discovery_llm, yt_search=yt_search)
         discovery_sched = DiscoveryScheduler(
@@ -364,13 +366,18 @@ async def _build_resolver(api):
     from neo.core.resolver import ResolutionLLM, SparkResolver
     from neo.core.web_search import WebSearchClient, NullWebSearch
 
-    res_key = settings.llm_resolution_api_key or settings.llm_spark_api_key
-    if not res_key:
-        raise RuntimeError("Spark investigation requires NEO_LLM_RESOLUTION_API_KEY or NEO_LLM_SPARK_API_KEY")
+    res_key = settings.llm_api_key_for("resolution")
+    if not settings.llm_configured_for("resolution"):
+        raise RuntimeError(
+            "Spark investigation requires an LLM configuration. Set NEO_LLM_API_KEY "
+            "for cloud models, or set NEO_LLM_PROVIDER=openai with NEO_LLM_BASE_URL "
+            "for local OpenAI-compatible servers."
+        )
     llm = ResolutionLLM(
         api_key=res_key,
-        model=settings.llm_resolution_model or settings.llm_spark_model,
-        base_url=settings.llm_resolution_base_url or settings.llm_spark_base_url,
+        model=settings.llm_model_for("resolution"),
+        base_url=settings.llm_base_url_for("resolution"),
+        provider=settings.llm_provider_for("resolution"),
     )
     web_search = (
         WebSearchClient(settings.search_provider, settings.search_api_key)
@@ -852,13 +859,14 @@ async def trigger_discovery() -> str:
             WebSearchClient(settings.search_provider, settings.search_api_key)
         )
 
-    res_key   = settings.llm_resolution_api_key or settings.llm_spark_api_key
-    res_model = settings.llm_resolution_model or settings.llm_spark_model
-    res_url   = settings.llm_resolution_base_url or settings.llm_spark_base_url
+    res_key = settings.llm_api_key_for("resolution")
+    res_model = settings.llm_model_for("resolution")
+    res_url = settings.llm_base_url_for("resolution")
+    res_provider = settings.llm_provider_for("resolution")
     discovery_llm = None
-    if res_key:
+    if settings.llm_configured_for("resolution"):
         from neo.core.resolver import ResolutionLLM
-        discovery_llm = ResolutionLLM(api_key=res_key, model=res_model, base_url=res_url)
+        discovery_llm = ResolutionLLM(api_key=res_key, model=res_model, base_url=res_url, provider=res_provider)
 
     job = DiscoveryJob(api, llm=discovery_llm, yt_search=yt_search)
     fresh_agent = await api.store.get_agent(agent["id"])
@@ -945,13 +953,14 @@ async def ingest_youtube(
         provenance_parts.append(f"Query focus: {query_focus}")
     from neo.core.discovery import append_source_provenance, extract_knowledge_findings
 
-    res_key   = settings.llm_resolution_api_key or settings.llm_spark_api_key
-    res_model = settings.llm_resolution_model or settings.llm_spark_model
-    res_url   = settings.llm_resolution_base_url or settings.llm_spark_base_url
+    res_key = settings.llm_api_key_for("resolution")
+    res_model = settings.llm_model_for("resolution")
+    res_url = settings.llm_base_url_for("resolution")
+    res_provider = settings.llm_provider_for("resolution")
     discovery_llm = None
-    if res_key:
+    if settings.llm_configured_for("resolution"):
         from neo.core.resolver import ResolutionLLM
-        discovery_llm = ResolutionLLM(api_key=res_key, model=res_model, base_url=res_url)
+        discovery_llm = ResolutionLLM(api_key=res_key, model=res_model, base_url=res_url, provider=res_provider)
 
     findings = await extract_knowledge_findings(
         source_title=inferred_title,

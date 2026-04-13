@@ -56,7 +56,7 @@ Neo/
 
       cli/
         __init__.py
-        main.py                  # CLI: init, serve, serve-rest, consolidate
+        main.py                  # CLI: setup, init, serve, serve-rest, consolidate
 
   migrations/
     env.py                       # Alembic env (Postgres only)
@@ -466,6 +466,11 @@ Shared settings such as database, LLM, search, and discovery belong in
 `NEO_AGENT_NAME` or a launch argument such as `neo serve --agent-name hermes`.
 Multiple agent identities share the same Neo network/database while retaining
 separate root nodes.
+
+`neo setup` is machine-level only: it writes/updates `~/.neo/.env`, initializes
+schema with `init_db()`, and prints MCP launch guidance. It must not create or
+configure an agent root. Agent nodes are created lazily when a named agent
+connects and can then configure itself conversationally via `configure_agent`.
 
 ---
 

@@ -1,6 +1,12 @@
 import click
 
-from neo.config import get_config_env_path, set_runtime_agent_name, settings
+from neo.config import (
+    get_config_env_path,
+    read_env_file,
+    set_runtime_agent_name,
+    settings,
+    write_env_file,
+)
 from neo.core.consolidation import ConsolidationEngine
 from neo.db import init_db
 from neo.mcp.server import mcp
@@ -12,6 +18,118 @@ from neo.store import create_store
 @click.group()
 def cli() -> None:
     """Neo CLI."""
+
+
+@cli.command()
+@click.option(
+    "--provider",
+    type=click.Choice(["none", "ollama", "openai", "openrouter", "anthropic", "minimax"]),
+    default=None,
+    help="LLM provider to write into Neo's user config.",
+)
+@click.option("--model", default=None, help="LLM model name.")
+@click.option("--base-url", default=None, help="Optional LLM API base URL.")
+@click.option("--api-key", default=None, help="Optional LLM API key. Prefer --api-key-env for shared machines.")
+@click.option("--api-key-env", default=None, help="Read the LLM API key from this environment variable.")
+@click.option("--search-provider", default=None, help="Optional search provider, e.g. tavily or exa.")
+@click.option("--search-api-key", default=None, help="Optional search API key.")
+@click.option("--search-api-key-env", default=None, help="Read the search API key from this environment variable.")
+@click.option("--non-interactive", is_flag=True, help="Do not prompt; use provided flags and defaults.")
+def setup(
+    provider: str | None,
+    model: str | None,
+    base_url: str | None,
+    api_key: str | None,
+    api_key_env: str | None,
+    search_provider: str | None,
+    search_api_key: str | None,
+    search_api_key_env: str | None,
+    non_interactive: bool,
+) -> None:
+    """Configure this Neo installation without creating an agent node."""
+    import asyncio
+    import os
+
+    config_path = get_config_env_path()
+    values = read_env_file(config_path)
+
+    chosen_provider = provider
+    if chosen_provider is None and not non_interactive:
+        chosen_provider = click.prompt(
+            "LLM provider",
+            default=values.get("NEO_LLM_PROVIDER", "ollama"),
+            type=click.Choice(["none", "ollama", "openai", "openrouter", "anthropic", "minimax"]),
+        )
+    chosen_provider = chosen_provider or values.get("NEO_LLM_PROVIDER") or "ollama"
+
+    if chosen_provider == "none":
+        for key in ("NEO_LLM_PROVIDER", "NEO_LLM_MODEL", "NEO_LLM_BASE_URL", "NEO_LLM_API_KEY"):
+            values.pop(key, None)
+    else:
+        default_model = {
+            "ollama": "llama3.2",
+            "openai": "gpt-4.1-mini",
+            "openrouter": "anthropic/claude-sonnet-4",
+            "anthropic": "claude-haiku-4-5",
+            "minimax": "MiniMax-M2.7",
+        }[chosen_provider]
+        chosen_model = model
+        if chosen_model is None and not non_interactive:
+            chosen_model = click.prompt("LLM model", default=values.get("NEO_LLM_MODEL", default_model))
+        chosen_model = chosen_model or values.get("NEO_LLM_MODEL") or default_model
+
+        resolved_base_url = base_url
+        if resolved_base_url is None:
+            defaults = {
+                "ollama": "http://127.0.0.1:11434/v1",
+                "openai": "https://api.openai.com/v1",
+                "openrouter": "https://openrouter.ai/api/v1",
+                "minimax": "https://api.minimax.io/anthropic",
+            }
+            resolved_base_url = values.get("NEO_LLM_BASE_URL") or defaults.get(chosen_provider)
+            if not non_interactive and resolved_base_url:
+                resolved_base_url = click.prompt("LLM base URL", default=resolved_base_url)
+
+        resolved_api_key = api_key
+        if api_key_env:
+            resolved_api_key = os.environ.get(api_key_env)
+            if not resolved_api_key:
+                raise click.ClickException(f"{api_key_env} is not set")
+        if resolved_api_key is None and not non_interactive and chosen_provider not in {"ollama"}:
+            existing = values.get("NEO_LLM_API_KEY")
+            prompt_value = click.prompt(
+                "LLM API key",
+                default=existing or "",
+                hide_input=True,
+                show_default=bool(existing),
+            )
+            resolved_api_key = prompt_value or None
+
+        values["NEO_LLM_PROVIDER"] = chosen_provider
+        values["NEO_LLM_MODEL"] = chosen_model
+        if resolved_base_url:
+            values["NEO_LLM_BASE_URL"] = resolved_base_url
+        if resolved_api_key:
+            values["NEO_LLM_API_KEY"] = resolved_api_key
+
+    resolved_search_key = search_api_key
+    if search_api_key_env:
+        resolved_search_key = os.environ.get(search_api_key_env)
+        if not resolved_search_key:
+            raise click.ClickException(f"{search_api_key_env} is not set")
+    if search_provider:
+        values["NEO_SEARCH_PROVIDER"] = search_provider
+    if resolved_search_key:
+        values["NEO_SEARCH_API_KEY"] = resolved_search_key
+
+    write_env_file(values, config_path)
+    asyncio.run(init_db())
+
+    click.echo(f"Neo config written: {config_path}")
+    click.echo("Neo database initialized.")
+    click.echo("No agent node was created. Agent roots are created when an agent connects.")
+    click.echo("MCP config example:")
+    click.echo('{"mcpServers":{"neo":{"command":"neo","args":["serve","--agent-name","YOUR_AGENT_NAME"]}}}')
 
 
 @cli.command("mcp-config")

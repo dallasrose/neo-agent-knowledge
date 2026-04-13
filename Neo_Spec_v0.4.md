@@ -334,6 +334,10 @@ pip install neo-agent-knowledge[all]
 
 Zero-config minimum works out of the box. Each capability unlocks with one env var.
 
+`neo setup` is the first-run command. It configures Neo's machine-level
+settings, creates `~/.neo/.env` when needed, initializes database schema, and
+prints an MCP snippet. It does not create or configure an agent node.
+
 LLM configuration:
 
 ```

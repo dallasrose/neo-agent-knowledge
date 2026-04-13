@@ -30,3 +30,28 @@ def test_mcp_config_agent_name_uses_command_arg() -> None:
     server = config["mcpServers"]["neo"]
     assert server["args"] == ["serve", "--agent-name", "hermes"]
     assert "env" not in server
+
+
+def test_setup_configures_neo_without_agent_identity(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / ".neo.env"
+    monkeypatch.setattr("neo.cli.main.get_config_env_path", lambda: config_path)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "setup",
+            "--provider",
+            "ollama",
+            "--model",
+            "llama3.2",
+            "--non-interactive",
+        ],
+    )
+
+    assert result.exit_code == 0
+    content = config_path.read_text()
+    assert "NEO_LLM_PROVIDER=ollama" in content
+    assert "NEO_LLM_MODEL=llama3.2" in content
+    assert "NEO_LLM_BASE_URL=http://127.0.0.1:11434/v1" in content
+    assert "NEO_AGENT_NAME" not in content
+    assert "No agent node was created" in result.output

@@ -164,6 +164,30 @@ def set_runtime_agent_name(agent_name: str | None) -> None:
         settings.agent_name = agent_name
 
 
+def read_env_file(path: Path | None = None) -> dict[str, str]:
+    env_path = path or _DEFAULT_ENV
+    values: dict[str, str] = {}
+    if not env_path.exists():
+        return values
+    for raw in env_path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def write_env_file(values: dict[str, str], path: Path | None = None) -> None:
+    env_path = path or _DEFAULT_ENV
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["# Neo user-level config. Do not commit or share."]
+    for key in sorted(k for k, v in values.items() if v is not None and str(v) != ""):
+        lines.append(f"{key}={values[key]}")
+    env_path.write_text("\n".join(lines) + "\n")
+    env_path.chmod(0o600)
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()

@@ -47,12 +47,22 @@ python3.12 -m pip install 'neo-agent-knowledge @ git+https://github.com/dallasro
 
 ## Start
 
-Initialize the local SQLite database and default agent:
+Configure Neo once on this machine:
 
 ```bash
-neo init
+neo setup
 neo status
 ```
+
+For a local Ollama setup without prompts:
+
+```bash
+neo setup --provider ollama --model llama3.2 --non-interactive
+```
+
+`neo setup` configures Neo itself and initializes the database schema. It does
+not create or configure an agent node; the agent does that for itself when it
+connects.
 
 Start the MCP server over stdio:
 
@@ -97,12 +107,7 @@ Neo starts when the agent launches the MCP server. No separate daemon is
 required for stdio mode.
 
 Shared Neo settings such as the database, LLM, search keys, and discovery
-configuration should live in Neo's own config file, not in the agent platform:
-
-```bash
-mkdir -p ~/.neo
-$EDITOR ~/.neo/.env
-```
+configuration live in Neo's own config file, not in the agent platform.
 
 Use `neo config-path` to print the exact file Neo reads.
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from neo.config import Settings
-from neo.core.llm import NeoLLMClient, normalize_llm_provider
+from neo.core.llm import NeoLLMClient, _collect_text, normalize_llm_provider
 
 
 class _FakeResponse:
@@ -32,11 +32,25 @@ class _FakeAsyncClient:
         return _FakeResponse()
 
 
+class _TextBlock:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+class _ContentBlock:
+    def __init__(self, content) -> None:
+        self.content = content
+
+
 def test_normalize_openai_compatible_aliases() -> None:
     assert normalize_llm_provider("openai") == "openai"
     assert normalize_llm_provider("ollama") == "openai"
     assert normalize_llm_provider("openrouter") == "openai"
     assert normalize_llm_provider("minimax") == "anthropic"
+
+
+def test_collect_text_handles_anthropic_compatible_content_shapes() -> None:
+    assert _collect_text([_TextBlock(" alpha "), {"text": "beta"}, _ContentBlock([{"content": "gamma"}])]) == "alpha\nbeta\ngamma"
 
 
 @pytest.mark.asyncio

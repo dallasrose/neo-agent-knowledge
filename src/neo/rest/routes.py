@@ -46,6 +46,11 @@ def compact_node(node: dict) -> dict:
     }
 
 
+def visible_in_graph(node: dict) -> bool:
+    metadata = node.get("metadata") or {}
+    return metadata.get("role") != "agents_root"
+
+
 @router.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
     db_scheme = urlparse(settings.db_connection_uri).scheme or settings.db_connection_uri.split(":", 1)[0]
@@ -180,8 +185,13 @@ async def get_graph(
 ) -> dict:
     """Return all nodes, edges, and active sparks for graph rendering."""
     agent = await ensure_default_agent(api)
-    nodes = await api.store.get_nodes_by_agent(agent["id"], limit=limit)
-    edges = await api.store.get_all_edges(agent["id"], limit=limit * 4)
+    all_nodes = await api.store.get_nodes_by_agent(agent["id"], limit=limit)
+    nodes = [node for node in all_nodes if visible_in_graph(node)]
+    visible_node_ids = {node["id"] for node in nodes}
+    edges = [
+        edge for edge in await api.store.get_all_edges(agent["id"], limit=limit * 4)
+        if edge["from_node_id"] in visible_node_ids and edge["to_node_id"] in visible_node_ids
+    ]
     active_sparks = await api.store.get_sparks(agent["id"], status="active", limit=200)
     resolved_sparks = await api.store.get_sparks(agent["id"], status="resolved", limit=500)
     # Count how many resolved sparks each node has absorbed. Active sparks render
@@ -192,11 +202,16 @@ async def get_graph(
         if not node_ids and s.get("resolved_node_id"):
             node_ids = [s["resolved_node_id"]]
         for nid in node_ids:
-            spark_node_counts[nid] = spark_node_counts.get(nid, 0) + 1
+            if nid in visible_node_ids:
+                spark_node_counts[nid] = spark_node_counts.get(nid, 0) + 1
+    sparks = [
+        spark for spark in active_sparks
+        if spark.get("target_node_id") in visible_node_ids or not spark.get("target_node_id")
+    ]
     return {
         "nodes": [compact_node(n) for n in nodes],
         "edges": edges,
-        "sparks": active_sparks,
+        "sparks": sparks,
         "spark_node_counts": spark_node_counts,
     }
 

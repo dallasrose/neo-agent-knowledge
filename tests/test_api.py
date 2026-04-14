@@ -5,7 +5,9 @@ from datetime import datetime, timezone
 import pytest
 
 from neo.core.api import NeoAPI
+from neo.core.relationships import RelationshipDecision
 from neo.core.sparks import SparkGenerator
+from neo.runtime import _migrate_agent_name_if_needed
 from neo.store.sqlite import SQLiteStore
 
 
@@ -22,6 +24,11 @@ class StubEmbeddingClient:
 class StubSparkLLM:
     async def generate(self, node, context):
         return [{"spark_type": "open_question", "description": f"question from {node['title']}"}]
+
+
+class StubRelationshipJudge:
+    async def judge(self, source, candidate, similarity):
+        return RelationshipDecision("supports", "Candidate supports source", 0.91, "llm")
 
 
 @pytest.mark.asyncio
@@ -75,6 +82,177 @@ async def test_store_node_defaults_to_agent_root_parent(session_factory):
 
     stored = await store.get_node(result["id"])
     assert stored["parent_id"] == root["id"]
+
+
+@pytest.mark.asyncio
+async def test_agent_name_migration_ignores_bootstrap_system_nodes(session_factory):
+    store = SQLiteStore(session_factory)
+    default_agent = await store.get_or_create_agent("default")
+    knowledge = await store.create_node(
+        default_agent["id"],
+        "finding",
+        "Existing Knowledge",
+        "Existing knowledge should move with the renamed agent.",
+        summary="existing",
+        confidence=0.8,
+        parent_id=None,
+        source_id=None,
+        spark_id=None,
+        embedding=[1.0],
+        domain="memory",
+        metadata=None,
+    )
+    hermes = await store.get_or_create_agent("hermes")
+    await store.create_node(
+        hermes["id"],
+        "concept",
+        "Agents",
+        "System root.",
+        summary="root",
+        confidence=1.0,
+        parent_id=None,
+        source_id=None,
+        spark_id=None,
+        embedding=None,
+        domain=None,
+        metadata={"system": True, "role": "agents_root"},
+    )
+
+    migrated = await _migrate_agent_name_if_needed(store, hermes, "hermes")
+
+    assert migrated["id"] == default_agent["id"]
+    assert await store.get_agent_by_name("default") is None
+    assert (await store.get_agent_by_name("hermes"))["id"] == default_agent["id"]
+    assert (await store.get_node(knowledge["id"]))["agent_id"] == migrated["id"]
+
+
+@pytest.mark.asyncio
+async def test_store_node_auto_links_semantic_neighbors_across_branches(session_factory):
+    store = SQLiteStore(session_factory)
+    agent = await store.get_or_create_agent("neo")
+    left = await store.create_node(agent["id"], "concept", "Left", "left", summary="left", confidence=1.0, parent_id=None, source_id=None, spark_id=None, embedding=None, domain="memory", metadata=None)
+    right = await store.create_node(agent["id"], "concept", "Right", "right", summary="right", confidence=1.0, parent_id=None, source_id=None, spark_id=None, embedding=None, domain="memory", metadata=None)
+    related = await store.create_node(agent["id"], "finding", "Related", "memory related", summary="related", confidence=0.8, parent_id=left["id"], source_id=None, spark_id=None, embedding=[1.0, 0.0, 0.0], domain="memory", metadata=None)
+    sibling = await store.create_node(agent["id"], "finding", "Sibling", "memory sibling", summary="sibling", confidence=0.8, parent_id=right["id"], source_id=None, spark_id=None, embedding=[1.0, 0.0, 0.0], domain="memory", metadata=None)
+    api = NeoAPI(store, embedding_client=StubEmbeddingClient())
+
+    result = await api.store_node(
+        agent_id=agent["id"],
+        node_type="finding",
+        title="New Related",
+        content="memory new related",
+        parent_id=right["id"],
+        generate_sparks=False,
+    )
+
+    edges = await store.get_edges(result["id"])
+    linked_ids = {edge["to_node_id"] for edge in edges}
+    assert result["edges_created"] == 1
+    assert related["id"] in linked_ids
+    assert sibling["id"] not in linked_ids
+    assert edges[0]["edge_type"] == "connects"
+
+
+@pytest.mark.asyncio
+async def test_store_node_uses_relationship_judge_edge_type(session_factory):
+    store = SQLiteStore(session_factory)
+    agent = await store.get_or_create_agent("neo")
+    left = await store.create_node(agent["id"], "concept", "Left", "left", summary="left", confidence=1.0, parent_id=None, source_id=None, spark_id=None, embedding=None, domain="memory", metadata=None)
+    right = await store.create_node(agent["id"], "concept", "Right", "right", summary="right", confidence=1.0, parent_id=None, source_id=None, spark_id=None, embedding=None, domain="memory", metadata=None)
+    await store.create_node(agent["id"], "finding", "Evidence", "memory evidence", summary="evidence", confidence=0.8, parent_id=left["id"], source_id=None, spark_id=None, embedding=[1.0, 0.0, 0.0], domain="memory", metadata=None)
+    api = NeoAPI(store, embedding_client=StubEmbeddingClient(), relationship_judge=StubRelationshipJudge())
+
+    result = await api.store_node(
+        agent_id=agent["id"],
+        node_type="finding",
+        title="Claim",
+        content="memory claim",
+        parent_id=right["id"],
+        generate_sparks=False,
+    )
+
+    edges = await store.get_edges(result["id"])
+    assert edges[0]["edge_type"] == "supports"
+    assert edges[0]["description"] == "Candidate supports source"
+    assert edges[0]["weight"] == 0.91
+    assert edges[0]["metadata"]["generated_by"] == "relationship_judge"
+
+
+@pytest.mark.asyncio
+async def test_search_knowledge_expands_auto_linked_cross_branch_nodes(session_factory):
+    store = SQLiteStore(session_factory)
+    agent = await store.get_or_create_agent("neo")
+    left = await store.create_node(agent["id"], "concept", "Left", "left", summary="left", confidence=1.0, parent_id=None, source_id=None, spark_id=None, embedding=None, domain="memory", metadata=None)
+    right = await store.create_node(agent["id"], "concept", "Right", "right", summary="right", confidence=1.0, parent_id=None, source_id=None, spark_id=None, embedding=None, domain="memory", metadata=None)
+    await store.create_node(agent["id"], "finding", "Related", "memory related", summary="related", confidence=0.8, parent_id=left["id"], source_id=None, spark_id=None, embedding=[1.0, 0.0, 0.0], domain="memory", metadata=None)
+    api = NeoAPI(store, embedding_client=StubEmbeddingClient())
+    await api.store_node(
+        agent_id=agent["id"],
+        node_type="finding",
+        title="New Related",
+        content="memory new related",
+        parent_id=right["id"],
+        generate_sparks=False,
+    )
+
+    result = await api.search_knowledge(
+        agent_id=agent["id"],
+        query="memory",
+        top_k=1,
+        hop_depth=1,
+        min_weight=0.5,
+    )
+
+    titles = {node["title"] for node in result["nodes"]}
+    assert {"Related", "New Related"}.issubset(titles)
+    assert any(edge["edge_type"] == "connects" for edge in result["edges"])
+
+
+@pytest.mark.asyncio
+async def test_build_relationships_backfills_without_reverse_duplicates(session_factory):
+    store = SQLiteStore(session_factory)
+    agent = await store.get_or_create_agent("neo")
+    left = await store.create_node(agent["id"], "concept", "Left", "left", summary="left", confidence=1.0, parent_id=None, source_id=None, spark_id=None, embedding=None, domain="memory", metadata=None)
+    right = await store.create_node(agent["id"], "concept", "Right", "right", summary="right", confidence=1.0, parent_id=None, source_id=None, spark_id=None, embedding=None, domain="memory", metadata=None)
+    await store.create_node(agent["id"], "finding", "Related A", "memory a", summary="a", confidence=0.8, parent_id=left["id"], source_id=None, spark_id=None, embedding=[1.0, 0.0, 0.0], domain="memory", metadata=None)
+    await store.create_node(agent["id"], "finding", "Related B", "memory b", summary="b", confidence=0.8, parent_id=right["id"], source_id=None, spark_id=None, embedding=[1.0, 0.0, 0.0], domain="memory", metadata=None)
+    api = NeoAPI(store, embedding_client=StubEmbeddingClient())
+
+    first = await api.build_relationships(agent_id=agent["id"])
+    second = await api.build_relationships(agent_id=agent["id"])
+
+    assert first["edges_created"] == 1
+    assert second["edges_created"] == 0
+    assert len(await store.get_edges((await store.get_nodes_by_agent(agent["id"], node_type="finding"))[0]["id"])) == 1
+
+
+@pytest.mark.asyncio
+async def test_reclassify_relationships_updates_judged_edges(session_factory):
+    store = SQLiteStore(session_factory)
+    agent = await store.get_or_create_agent("neo")
+    left = await store.create_node(agent["id"], "concept", "Left", "left", summary="left", confidence=1.0, parent_id=None, source_id=None, spark_id=None, embedding=None, domain="memory", metadata=None)
+    right = await store.create_node(agent["id"], "concept", "Right", "right", summary="right", confidence=1.0, parent_id=None, source_id=None, spark_id=None, embedding=None, domain="memory", metadata=None)
+    edge = await store.create_edge(
+        agent["id"],
+        left["id"],
+        right["id"],
+        "connects",
+        weight=0.83,
+        description="Semantically related knowledge",
+        source_id=None,
+        metadata={"generated_by": "auto_link", "similarity": 0.83},
+    )
+    api = NeoAPI(store, embedding_client=StubEmbeddingClient(), relationship_judge=StubRelationshipJudge())
+
+    result = await api.reclassify_relationships(agent_id=agent["id"])
+
+    updated = (await store.get_edges(left["id"]))[0]
+    assert result["edges_processed"] == 1
+    assert result["edges_updated"] == 1
+    assert updated["id"] == edge["id"]
+    assert updated["edge_type"] == "supports"
+    assert updated["description"] == "Candidate supports source"
+    assert updated["metadata"]["generated_by"] == "relationship_judge"
 
 
 @pytest.mark.asyncio

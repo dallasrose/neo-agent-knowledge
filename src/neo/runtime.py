@@ -28,6 +28,21 @@ def _build_spark_generator(store) -> SparkGenerator:
     return SparkGenerator(store, llm=llm)
 
 
+def _build_relationship_judge():
+    from neo.core.relationships import HeuristicRelationshipJudge, LLMRelationshipJudge
+
+    fallback = HeuristicRelationshipJudge()
+    if not settings.llm_configured_for("relationship"):
+        return fallback
+    return LLMRelationshipJudge(
+        api_key=settings.llm_api_key_for("relationship"),
+        model=settings.llm_model_for("relationship"),
+        base_url=settings.llm_base_url_for("relationship"),
+        provider=settings.llm_provider_for("relationship"),
+        fallback=fallback,
+    )
+
+
 @lru_cache(maxsize=1)
 def get_api_singleton() -> NeoAPI:
     store = create_store()
@@ -35,6 +50,7 @@ def get_api_singleton() -> NeoAPI:
         store,
         embedding_client=EmbeddingClient(),
         spark_generator=_build_spark_generator(store),
+        relationship_judge=_build_relationship_judge(),
     )
 
 
@@ -44,10 +60,14 @@ async def _migrate_agent_name_if_needed(store: StoreInterface, new_agent: dict, 
     if target_name == "default":
         return new_agent
 
-    # If new agent already has nodes, nothing to migrate
     nodes = await store.get_nodes_by_agent(new_agent["id"], limit=1)
+    # If new agent already has user data, nothing to migrate.
+    target_nodes: list[dict] = []
     if nodes:
-        return new_agent
+        target_nodes = await store.get_nodes_by_agent(new_agent["id"], limit=10)
+        has_user_data = any(not (node.get("metadata") or {}).get("system") for node in target_nodes)
+        if has_user_data or len(target_nodes) == 10:
+            return new_agent
 
     # Check for legacy "default" agent with data
     default_agent = await store.get_agent_by_name("default")
@@ -60,6 +80,8 @@ async def _migrate_agent_name_if_needed(store: StoreInterface, new_agent: dict, 
 
     # Rename: delete the empty new agent, then rename "default" → target_name
     logger.info("Neo: migrating agent 'default' → '%s'", target_name)
+    for node in target_nodes:
+        await store.delete_node(node["id"])
     await store.delete_agent(new_agent["id"])
     return await store.update_agent(default_agent["id"], name=target_name)
 

@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     llm_spark_model: str = "claude-haiku-4-5"
     llm_spark_api_key: str | None = None
     llm_spark_base_url: str | None = None  # Custom base URL (e.g. MiniMax Anthropic-compat endpoint)
+    llm_relationship_provider: str = ""
+    llm_relationship_model: str = ""
+    llm_relationship_api_key: str | None = None
+    llm_relationship_base_url: str | None = None
     llm_consolidation_provider: str = ""
     llm_consolidation_model: str = "claude-sonnet-4-20250514"
     llm_consolidation_api_key: str | None = None

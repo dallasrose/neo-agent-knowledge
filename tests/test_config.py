@@ -88,3 +88,43 @@ def test_default_cli_launches_visualizer(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert calls == [("127.0.0.1", 8420, None)]
+
+
+def test_relationships_cli_defaults_to_all_agents(monkeypatch) -> None:
+    calls = []
+
+    class FakeStore:
+        async def list_agents(self):
+            return [{"id": "a1", "name": "atlas"}, {"id": "a2", "name": "hermes"}]
+
+        async def get_or_create_agent(self, name):
+            return {"id": name, "name": name}
+
+    class FakeAPI:
+        store = FakeStore()
+
+        async def build_relationships(self, *, agent_id, limit):
+            calls.append(("build", agent_id, limit))
+            return {"nodes_processed": 1, "edges_created": 2}
+
+        async def reclassify_relationships(self, *, agent_id, limit):
+            calls.append(("reclassify", agent_id, limit))
+            return {"edges_processed": 3, "edges_updated": 4, "edges_skipped": 5}
+
+    async def fake_init_db():
+        return None
+
+    monkeypatch.setattr("neo.cli.main.init_db", fake_init_db)
+    monkeypatch.setattr("neo.cli.main.get_api_singleton", lambda: FakeAPI())
+
+    result = CliRunner().invoke(cli, ["relationships", "--limit", "7"])
+
+    assert result.exit_code == 0
+    assert calls == [
+        ("build", "a1", 7),
+        ("reclassify", "a1", 7),
+        ("build", "a2", 7),
+        ("reclassify", "a2", 7),
+    ]
+    assert "atlas:" in result.output
+    assert "hermes:" in result.output

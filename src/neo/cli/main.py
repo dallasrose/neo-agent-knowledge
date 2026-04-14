@@ -12,7 +12,7 @@ from neo.core.consolidation import ConsolidationEngine
 from neo.db import init_db
 from neo.mcp.server import mcp
 from neo.rest.app import app as rest_app
-from neo.runtime import ensure_default_agent
+from neo.runtime import ensure_default_agent, get_api_singleton
 from neo.store import create_store
 
 
@@ -274,6 +274,43 @@ def serve_rest(host: str, port: int, agent_name: str | None) -> None:
 def config_path() -> None:
     """Print Neo's user-level config file path."""
     click.echo(str(get_config_env_path()))
+
+
+@cli.command("relationships")
+@click.option("--agent-name", default=None, help="Only process this agent. Defaults to every agent.")
+@click.option("--limit", default=1000, show_default=True, help="Max nodes/edges to process per agent.")
+@click.option("--build/--no-build", default=True, show_default=True, help="Create missing generated relationships.")
+@click.option("--reclassify/--no-reclassify", default=True, show_default=True, help="Rejudge generated relationships.")
+def relationships(agent_name: str | None, limit: int, build: bool, reclassify: bool) -> None:
+    """Build and classify generated relationships for one or all agents."""
+    import asyncio
+
+    async def _run() -> None:
+        await init_db()
+        api = get_api_singleton()
+        if agent_name:
+            agent = await api.store.get_or_create_agent(agent_name)
+            agents = [agent]
+        else:
+            agents = await api.store.list_agents()
+
+        for agent in agents:
+            build_result = {"nodes_processed": 0, "edges_created": 0}
+            reclassify_result = {"edges_processed": 0, "edges_updated": 0, "edges_skipped": 0}
+            if build:
+                build_result = await api.build_relationships(agent_id=agent["id"], limit=limit)
+            if reclassify:
+                reclassify_result = await api.reclassify_relationships(agent_id=agent["id"], limit=limit)
+            click.echo(
+                f"{agent['name']}: "
+                f"nodes={build_result['nodes_processed']} "
+                f"created={build_result['edges_created']} "
+                f"judged={reclassify_result['edges_processed']} "
+                f"updated={reclassify_result['edges_updated']} "
+                f"skipped={reclassify_result['edges_skipped']}"
+            )
+
+    asyncio.run(_run())
 
 
 @cli.command()

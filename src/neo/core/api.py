@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from neo.core.assembler import WorkingMemoryAssembler
+from neo.core.relationships import HeuristicRelationshipJudge, RelationshipJudge
 from neo.core.sparks import SparkGenerator
 from neo.embedding.client import EmbeddingClient
 from neo.enums import EdgeType, NodeType
@@ -12,6 +13,9 @@ from neo.store.interface import StoreInterface
 
 
 class NeoAPI:
+    AUTO_LINK_MIN_SIMILARITY = 0.82
+    AUTO_LINK_MAX_EDGES = 3
+
     def __init__(
         self,
         store: StoreInterface,
@@ -19,11 +23,13 @@ class NeoAPI:
         embedding_client: EmbeddingClient | Any,
         assembler: WorkingMemoryAssembler | None = None,
         spark_generator: SparkGenerator | None = None,
+        relationship_judge: RelationshipJudge | None = None,
     ) -> None:
         self.store = store
         self.embedding_client = embedding_client
         self.assembler = assembler or WorkingMemoryAssembler(store)
         self.spark_generator = spark_generator or SparkGenerator(store)
+        self.relationship_judge = relationship_judge or HeuristicRelationshipJudge()
         # Keep strong references to fire-and-forget tasks so GC can't collect them mid-run
         self._background_tasks: set[asyncio.Task] = set()
 
@@ -96,12 +102,14 @@ class NeoAPI:
                 )
                 self._background_tasks.add(task)
                 task.add_done_callback(self._background_tasks.discard)
+        linked_edges = await self._link_related_nodes(agent_id, node, embedding)
         return {
             "id": node["id"],
             "title": node["title"],
             "node_type": node["node_type"],
             "confidence": node["confidence"],
             "spark_generation": "triggered" if generate_sparks else "skipped",
+            "edges_created": len(linked_edges),
         }
 
     async def get_node(
@@ -293,6 +301,58 @@ class NeoAPI:
             return None
         return root_id
 
+    async def _link_related_nodes(
+        self,
+        agent_id: str,
+        node: dict[str, Any],
+        embedding: list[float] | None,
+    ) -> list[dict[str, Any]]:
+        if not embedding or (node.get("metadata") or {}).get("system"):
+            return []
+
+        candidates = await self.store.vector_search(agent_id, embedding, top_k=12)
+        existing_edges = await self.store.get_edges(node["id"])
+        connected_ids = {
+            edge["to_node_id"] if edge["from_node_id"] == node["id"] else edge["from_node_id"]
+            for edge in existing_edges
+        }
+        linked: list[dict[str, Any]] = []
+        parent_id = node.get("parent_id")
+        for candidate in candidates:
+            if candidate["id"] == node["id"]:
+                continue
+            if candidate["id"] in connected_ids:
+                continue
+            if candidate.get("parent_id") == parent_id:
+                continue
+            if (candidate.get("metadata") or {}).get("system"):
+                continue
+            similarity = candidate.get("similarity", 0.0)
+            if similarity < self.AUTO_LINK_MIN_SIMILARITY:
+                continue
+            decision = await self.relationship_judge.judge(node, candidate, similarity)
+            if decision.edge_type is None:
+                continue
+            linked.append(
+                await self.store.create_edge(
+                    agent_id,
+                    node["id"],
+                    candidate["id"],
+                    decision.edge_type,
+                    weight=decision.confidence,
+                    description=decision.description,
+                    source_id=None,
+                    metadata={
+                        "generated_by": "relationship_judge" if decision.source == "llm" else "relationship_heuristic",
+                        "similarity": similarity,
+                        "judge_confidence": decision.confidence,
+                    },
+                )
+            )
+            if len(linked) >= self.AUTO_LINK_MAX_EDGES:
+                break
+        return linked
+
     async def _validate_parent_id(
         self,
         *,
@@ -338,6 +398,73 @@ class NeoAPI:
             domain=domain,
             scope=scope,
         )
+
+    async def build_relationships(
+        self,
+        *,
+        agent_id: str,
+        limit: int = 200,
+    ) -> dict[str, int]:
+        nodes = await self.store.get_nodes_by_agent(agent_id, limit=limit)
+        nodes_processed = 0
+        edges_created = 0
+        for node in nodes:
+            if (node.get("metadata") or {}).get("system"):
+                continue
+            nodes_processed += 1
+            edges_created += len(await self._link_related_nodes(agent_id, node, node.get("embedding")))
+        return {"nodes_processed": nodes_processed, "edges_created": edges_created}
+
+    async def reclassify_relationships(
+        self,
+        *,
+        agent_id: str,
+        limit: int = 2000,
+    ) -> dict[str, int]:
+        edges = await self.store.get_all_edges(agent_id, limit=limit)
+        edges_processed = 0
+        edges_updated = 0
+        edges_skipped = 0
+        for edge in edges:
+            metadata = edge.get("metadata") or {}
+            if metadata.get("generated_by") not in {"auto_link", "relationship_judge"}:
+                continue
+            source = await self.store.get_node(edge["from_node_id"])
+            candidate = await self.store.get_node(edge["to_node_id"])
+            if source is None or candidate is None:
+                edges_skipped += 1
+                continue
+            similarity = float(metadata.get("similarity") or edge.get("weight") or 0.0)
+            decision = await self.relationship_judge.judge(source, candidate, similarity)
+            edges_processed += 1
+            if decision.edge_type is None:
+                edges_skipped += 1
+                continue
+            if decision.source != "llm" and metadata.get("generated_by") == "auto_link":
+                edges_skipped += 1
+                continue
+            if (
+                edge["edge_type"] == decision.edge_type
+                and edge["description"] == decision.description
+                and edge["weight"] == decision.confidence
+            ):
+                continue
+            await self.store.update_edge(
+                edge["id"],
+                edge_type=decision.edge_type,
+                description=decision.description,
+                weight=decision.confidence,
+                metadata={
+                    "generated_by": "relationship_judge" if decision.source == "llm" else "relationship_heuristic",
+                    "judge_confidence": decision.confidence,
+                },
+            )
+            edges_updated += 1
+        return {
+            "edges_processed": edges_processed,
+            "edges_updated": edges_updated,
+            "edges_skipped": edges_skipped,
+        }
 
     async def get_sparks(
         self,

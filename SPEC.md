@@ -292,6 +292,16 @@ Each agent writes to its own namespace — all nodes carry `agent_id`. Any agent
 
 This is the network model. Agents share a knowledge graph. Each owns what it writes. All can read what others have built.
 
+Generated relationships are maintained per agent namespace. On node creation,
+Neo may create a typed edge to a semantically close node outside the same parent
+branch after a relationship judge classifies the edge as useful. Maintenance can
+be run across every agent namespace with `neo relationships`, or scoped to one
+identity with `neo relationships --agent-name <name>`.
+
+Relationship edges are retrieval edges, not just visualiser decoration.
+`search_knowledge` expands through `neo_edges`, so judged cross-branch
+relationships affect the context an agent receives.
+
 ---
 
 ## 10. Visualiser
@@ -320,6 +330,10 @@ spark       #fbbf24   amber — potential energy
 - Right: node or spark detail panel with edges and metadata
 - Bottom left: legend
 - Filter bar: type visibility and text search
+
+The visualiser hides the shared system `Agents` parent node, but keeps each
+actual agent root visible. It renders generated and manual typed relationships
+from `/api/graph`.
 
 ---
 

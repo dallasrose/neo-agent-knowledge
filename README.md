@@ -138,6 +138,10 @@ a distinct identity, pass a non-secret `--agent-name`:
 If no agent name is provided, Neo uses `NEO_AGENT_NAME` from config or
 `default`.
 
+Relationship maintenance is not tied to one agent name. The `neo relationships`
+command processes every agent namespace in the database by default, or one
+specific namespace with `--agent-name`.
+
 ## Using Neo From An Agent
 
 Neo exposes a small MCP tool surface for durable knowledge:
@@ -163,6 +167,12 @@ suggested_sources=[...])` to tell Neo which shows, channels, sites, or authors
 should guide discovery. Neo stores source URL and title as metadata on ingested
 nodes while the graph structure remains about the knowledge itself. Any source
 can produce multiple nodes when it contains multiple durable learnings.
+
+When nodes are created, Neo embeds the new node, finds close semantic neighbors
+outside the same parent branch, and asks the configured relationship judge to
+create a useful typed edge only when the relationship is strong enough. These
+generated edges are regular graph edges, so they appear in the visualizer and
+are followed by `search_knowledge` during graph expansion.
 
 `store_node` is still available as a compatibility alias for `create_node`, but
 new integrations should prefer `create_node`.
@@ -191,7 +201,7 @@ NEO_LLM_API_KEY=...
 
 Neo has one simple LLM configuration block. Task-specific values override it
 when set: `NEO_LLM_SPARK_*`, `NEO_LLM_RESOLUTION_*`, and
-`NEO_LLM_CONSOLIDATION_*`.
+`NEO_LLM_RELATIONSHIP_*`, and `NEO_LLM_CONSOLIDATION_*`.
 
 Supported LLM providers:
 
@@ -211,6 +221,12 @@ NEO_LLM_MODEL=llama3.2
 NEO_LLM_PROVIDER=anthropic
 NEO_LLM_MODEL=claude-haiku-4-5
 NEO_LLM_API_KEY=...
+
+# MiniMax Anthropic-compatible endpoint
+NEO_LLM_PROVIDER=minimax
+NEO_LLM_MODEL=MiniMax-M2.7
+NEO_LLM_BASE_URL=https://api.minimax.io/anthropic
+NEO_LLM_API_KEY=...
 ```
 
 Spark generation and spark resolution ask models for strict JSON and tolerate
@@ -218,6 +234,19 @@ common wrapping such as Markdown fences or surrounding prose. Small local models
 can work for simple spark generation, but autonomous spark resolution is a
 judged debate/synthesis workflow and benefits from a stronger instruction
 model.
+
+Relationship judging also asks for strict JSON. Thinking models such as
+MiniMax-M2.7 need enough output budget to emit final JSON after internal
+thinking; Neo uses a larger relationship-judge token budget for that reason.
+
+To use a separate model only for relationship classification:
+
+```bash
+NEO_LLM_RELATIONSHIP_PROVIDER=minimax
+NEO_LLM_RELATIONSHIP_MODEL=MiniMax-M2.7
+NEO_LLM_RELATIONSHIP_BASE_URL=https://api.minimax.io/anthropic
+NEO_LLM_RELATIONSHIP_API_KEY=...
+```
 
 Install tiers:
 
@@ -239,6 +268,30 @@ uv run neo
 
 Use `uv run neo serve --agent-name hermes` when testing Neo as a local stdio
 MCP server from an agent.
+
+Build or rejudge generated relationships across all local agents:
+
+```bash
+uv run neo relationships
+```
+
+Limit the maintenance run to one agent namespace:
+
+```bash
+uv run neo relationships --agent-name hermes
+```
+
+Useful modes:
+
+```bash
+uv run neo relationships --build --reclassify
+uv run neo relationships --no-build --reclassify
+uv run neo relationships --build --no-reclassify
+```
+
+For production, take a database backup before running relationship maintenance
+on an existing graph. The command may call the configured relationship model for
+each generated candidate edge, so cost and runtime scale with graph size.
 
 Run tests:
 

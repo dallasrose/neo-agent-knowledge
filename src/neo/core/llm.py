@@ -40,16 +40,32 @@ def normalize_llm_provider(provider: str | None) -> str:
 def _collect_text(value: Any) -> str:
     if isinstance(value, str):
         return value.strip()
+    if isinstance(value, dict):
+        return _collect_text(value.get("text") or value.get("content"))
     if isinstance(value, list):
         parts: list[str] = []
         for item in value:
             if isinstance(item, str):
                 parts.append(item)
             elif isinstance(item, dict):
-                text = item.get("text") or item.get("content")
-                if isinstance(text, str):
-                    parts.append(text)
+                parts.append(_collect_text(item))
+            else:
+                text = getattr(item, "text", None)
+                content = getattr(item, "content", None)
+                parts.append(_collect_text(text if text is not None else content))
         return "\n".join(part.strip() for part in parts if part and part.strip()).strip()
+    text = getattr(value, "text", None)
+    if text is not None:
+        return _collect_text(text)
+    content = getattr(value, "content", None)
+    if content is not None:
+        return _collect_text(content)
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        try:
+            return _collect_text(model_dump())
+        except Exception:
+            return ""
     return ""
 
 
@@ -145,7 +161,7 @@ class NeoLLMClient:
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
-        text_block = next((b for b in response.content if hasattr(b, "text")), None)
-        if text_block is None:
+        text = _collect_text(response.content)
+        if not text:
             raise ValueError("No text block in Anthropic-compatible LLM response")
-        return text_block.text.strip()
+        return text

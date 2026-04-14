@@ -79,6 +79,27 @@ def test_rest_title_lookup_surfaces_ambiguity():
     assert body["selected_match"]["domain"] == "agents"
 
 
+def test_rest_graph_hides_agents_root_node():
+    app = create_app()
+    with TestClient(app) as client:
+        client.post(
+            "/api/nodes",
+            json={
+                "node_type": "concept",
+                "title": "Semantic Memory",
+                "content": "Structured knowledge",
+                "domain": "memory",
+            },
+        )
+        response = client.get("/api/graph")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "Semantic Memory" in {node["title"] for node in body["nodes"]}
+    assert "Default" in {node["title"] for node in body["nodes"]}
+    assert "Agents" not in {node["title"] for node in body["nodes"]}
+
+
 def test_rest_validation_errors():
     app = create_app()
     with TestClient(app) as client:

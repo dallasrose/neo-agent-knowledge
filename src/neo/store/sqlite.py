@@ -48,6 +48,11 @@ class SQLiteStore(StoreInterface):
             await session.refresh(agent)
             return self._agent_to_dict(agent)
 
+    async def list_agents(self, *, limit: int = 1000) -> list[dict[str, Any]]:
+        async with self.session_factory() as session:
+            result = await session.execute(select(NeoAgent).order_by(NeoAgent.name.asc()).limit(limit))
+            return [self._agent_to_dict(agent) for agent in result.scalars().all()]
+
     async def get_agent_by_name(self, name: str) -> dict[str, Any] | None:
         async with self.session_factory() as session:
             result = await session.execute(select(NeoAgent).where(NeoAgent.name == name))
@@ -204,6 +209,22 @@ class SQLiteStore(StoreInterface):
                 query = query.where(NeoEdge.edge_type == edge_type)
             result = await session.execute(query.order_by(NeoEdge.created_at.asc()))
             return [self._edge_to_dict(edge) for edge in result.scalars().all()]
+
+    async def update_edge(self, edge_id: str, **kwargs: Any) -> dict[str, Any]:
+        async with self.session_factory() as session:
+            edge = await session.get(NeoEdge, edge_id)
+            if edge is None:
+                raise ValueError(f"Edge {edge_id} not found")
+            metadata = dict(edge.metadata_ or {})
+            for key, value in kwargs.items():
+                if key == "metadata":
+                    metadata.update(value or {})
+                else:
+                    setattr(edge, key, value)
+            edge.metadata_ = metadata
+            await session.commit()
+            await session.refresh(edge)
+            return self._edge_to_dict(edge)
 
     async def delete_node(self, node_id: str) -> bool:
         async with self.session_factory() as session:

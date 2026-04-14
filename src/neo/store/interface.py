@@ -19,6 +19,10 @@ class StoreInterface(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def list_agents(self, *, limit: int = 1000) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+    @abstractmethod
     async def create_node(
         self,
         agent_id: str,
@@ -82,6 +86,10 @@ class StoreInterface(ABC):
         direction: str = "both",
         edge_type: str | None = None,
     ) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def update_edge(self, edge_id: str, **kwargs: Any) -> dict[str, Any]:
         raise NotImplementedError
 
     @abstractmethod

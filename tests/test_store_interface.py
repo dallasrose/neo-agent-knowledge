@@ -50,6 +50,17 @@ async def test_store_crud_flow(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_list_agents_returns_all_agents_by_name(session_factory):
+    store = SQLiteStore(session_factory)
+    await store.get_or_create_agent("zeta")
+    await store.get_or_create_agent("atlas")
+
+    agents = await store.list_agents()
+
+    assert [agent["name"] for agent in agents] == ["atlas", "zeta"]
+
+
+@pytest.mark.asyncio
 async def test_vector_search_returns_most_similar_node(session_factory):
     store = SQLiteStore(session_factory)
     agent = await store.get_or_create_agent("neo")
@@ -171,6 +182,37 @@ async def test_duplicate_edge_constraint(session_factory):
     await store.create_edge(agent["id"], left["id"], right["id"], "connects", weight=0.5, description="first", source_id=None, metadata=None)
     with pytest.raises(IntegrityError):
         await store.create_edge(agent["id"], left["id"], right["id"], "connects", weight=0.5, description="dup", source_id=None, metadata=None)
+
+
+@pytest.mark.asyncio
+async def test_update_edge_changes_type_description_weight_and_metadata(session_factory):
+    store = SQLiteStore(session_factory)
+    agent = await store.get_or_create_agent("neo")
+    left = await store.create_node(
+        agent["id"], "concept", "Left", "l", summary="l", confidence=0.8,
+        parent_id=None, source_id=None, spark_id=None, embedding=[1.0], domain=None, metadata=None
+    )
+    right = await store.create_node(
+        agent["id"], "concept", "Right", "r", summary="r", confidence=0.8,
+        parent_id=None, source_id=None, spark_id=None, embedding=[1.0], domain=None, metadata=None
+    )
+    edge = await store.create_edge(
+        agent["id"], left["id"], right["id"], "connects",
+        weight=0.5, description="first", source_id=None, metadata={"generated_by": "auto_link"}
+    )
+
+    updated = await store.update_edge(
+        edge["id"],
+        edge_type="supports",
+        weight=0.9,
+        description="strong support",
+        metadata={"judge_confidence": 0.9},
+    )
+
+    assert updated["edge_type"] == "supports"
+    assert updated["weight"] == 0.9
+    assert updated["description"] == "strong support"
+    assert updated["metadata"] == {"generated_by": "auto_link", "judge_confidence": 0.9}
 
 
 @pytest.mark.asyncio

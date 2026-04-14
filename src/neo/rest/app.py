@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from neo.config import settings
 from neo.core.consolidation import ConsolidationEngine
+from neo.core.contemplation import run_contemplation_pass
 from neo.core.discovery import DiscoveryJob
 from neo.core.discovery_scheduler import DiscoveryScheduler
 from neo.core.scheduler import ConsolidationScheduler
@@ -30,6 +31,9 @@ async def lifespan(app: FastAPI):
 
     scheduler = None
     if settings.consolidation_enabled:
+        async def _contemplate_after_consolidation() -> None:
+            await run_contemplation_pass(api, agent["id"], batch=settings.contemplation_batch_size)
+
         scheduler = ConsolidationScheduler(
             api.store,
             ConsolidationEngine(api.store),
@@ -37,6 +41,7 @@ async def lifespan(app: FastAPI):
             schedule=settings.consolidation_schedule,
             node_threshold=settings.consolidation_node_threshold,
             poll_interval_seconds=settings.scheduler_poll_interval_seconds,
+            after_consolidation=_contemplate_after_consolidation if settings.contemplation_enabled else None,
         )
         scheduler.start()
     app.state.neo_scheduler = scheduler

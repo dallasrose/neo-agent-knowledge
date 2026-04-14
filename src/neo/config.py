@@ -57,9 +57,8 @@ class Settings(BaseSettings):
     consolidation_enabled: bool = True
     scheduler_poll_interval_seconds: float = 1.0
 
-    # Contemplation: background loop that generates sparks for nodes that have none
+    # Contemplation: post-consolidation pass that generates sparks for candidate nodes
     contemplation_enabled: bool = True
-    contemplation_interval_minutes: int = 15  # how often to run
     contemplation_batch_size: int = 10        # nodes to process per cycle
 
     # Web search (for background spark resolution)

@@ -11,6 +11,7 @@ from fastmcp import FastMCP
 
 from neo.config import settings
 from neo.core.consolidation import ConsolidationEngine
+from neo.core.contemplation import run_contemplation_pass
 from neo.core.scheduler import ConsolidationScheduler
 from neo.db import init_db
 from neo.runtime import ensure_default_agent, get_api_singleton
@@ -20,79 +21,6 @@ logger = logging.getLogger(__name__)
 _UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
 )
-
-
-async def _contemplation_loop(api, agent_id: str) -> None:
-    """Periodically scan the graph for interesting structural signals.
-
-    Candidate selection strategy (in priority order):
-      1. Recent nodes in the agent's core domains — fresh, on-topic knowledge
-         most likely to have open questions worth investigating.
-      2. Recent nodes outside core domains — new knowledge regardless of topic.
-      3. Isolated nodes (no sparks at all, newest first) — anything that has
-         never been examined for research gaps.
-
-    Sparks are not required on every node — the LLM returns [] when nothing
-    interesting emerges, which is correct behaviour.
-    """
-    from datetime import datetime, timedelta, timezone
-
-    interval = settings.contemplation_interval_minutes * 60
-    batch = settings.contemplation_batch_size
-    while True:
-        await asyncio.sleep(interval)
-        try:
-            agent = await api.store.get_agent(agent_id)
-            if agent is None:
-                continue
-
-            core_domains: set[str] = set(agent.get("domains") or [])
-            recent_cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
-
-            # 1. Recent nodes in core domains (highest research value)
-            recent_all = await api.store.get_nodes_by_agent(
-                agent_id, since=recent_cutoff, limit=batch * 2
-            )
-            # Split into domain-aligned and other
-            recent_on_topic = [
-                n for n in recent_all
-                if n.get("domain") and n["domain"] in core_domains
-            ]
-            recent_other = [
-                n for n in recent_all
-                if n not in recent_on_topic
-            ]
-
-            # 2. Isolated nodes with no sparks yet (newest first, from store)
-            isolated = await api.store.get_nodes_without_sparks(
-                agent_id, limit=batch
-            )
-
-            # Merge: on-topic recent → other recent → isolated, dedup
-            seen: set[str] = set()
-            candidates: list[dict] = []
-            for node in [*recent_on_topic, *recent_other, *isolated]:
-                if node["id"] not in seen and len(candidates) < batch:
-                    seen.add(node["id"])
-                    candidates.append(node)
-
-            if candidates:
-                on_topic_count = sum(
-                    1 for n in candidates
-                    if n.get("domain") and n["domain"] in core_domains
-                )
-                logger.info(
-                    "Contemplation: %d candidates (%d on-topic, %d other)",
-                    len(candidates), on_topic_count, len(candidates) - on_topic_count,
-                )
-            for node in candidates:
-                try:
-                    await api.spark_generator.generate_for_node(agent=agent, node=node)
-                except Exception as exc:
-                    logger.warning("Contemplation failed for node %s: %s", node.get("id"), exc)
-        except Exception as exc:
-            logger.warning("Contemplation loop error: %s", exc)
-
 
 @asynccontextmanager
 async def _lifespan(server: FastMCP):
@@ -104,6 +32,9 @@ async def _lifespan(server: FastMCP):
     tasks: list[asyncio.Task] = []
 
     if settings.consolidation_enabled:
+        async def _contemplate_after_consolidation() -> None:
+            await run_contemplation_pass(api, agent_id, batch=settings.contemplation_batch_size)
+
         scheduler = ConsolidationScheduler(
             api.store,
             ConsolidationEngine(api.store),
@@ -111,17 +42,10 @@ async def _lifespan(server: FastMCP):
             schedule=settings.consolidation_schedule,
             node_threshold=settings.consolidation_node_threshold,
             poll_interval_seconds=settings.scheduler_poll_interval_seconds,
+            after_consolidation=_contemplate_after_consolidation if settings.contemplation_enabled else None,
         )
         tasks.append(scheduler.start())
         logger.info("Neo: consolidation scheduler started (schedule=%s)", settings.consolidation_schedule)
-
-    if settings.contemplation_enabled:
-        tasks.append(asyncio.create_task(_contemplation_loop(api, agent_id)))
-        logger.info(
-            "Neo: contemplation loop started (every %d min, batch=%d)",
-            settings.contemplation_interval_minutes,
-            settings.contemplation_batch_size,
-        )
 
     if settings.resolution_enabled:
         from neo.core.web_search import WebSearchClient, NullWebSearch
@@ -808,7 +732,7 @@ async def configure_agent(
     - Research direction is saved to the agent record and its root graph node
     - A discovery run fires in the background — Neo starts finding and ingesting
       relevant content right away (first results within ~60 seconds)
-    - All background jobs (contemplation, resolution) inherit the new focus
+    - Background discovery and resolution inherit the new focus; contemplation runs after consolidation
 
     After calling: confirm what research direction is set, tell the user discovery
     is running, and offer to refine the focus if needed."""

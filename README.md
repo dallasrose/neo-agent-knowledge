@@ -67,6 +67,10 @@ connects. When an LLM is configured, setup enables background spark resolution
 automatically. Resolved sparks leave the active queue and strengthen the node
 they synthesize into.
 
+Contemplation runs after consolidation, not on a separate timer. When enabled,
+it scans recent and isolated nodes after each consolidation pass and creates
+sparks only for useful gaps or tensions.
+
 Launch the local REST API and visualizer:
 
 ```bash

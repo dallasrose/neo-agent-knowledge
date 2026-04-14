@@ -130,11 +130,13 @@ No maintenance job. When consolidation creates a synthesis from three findings, 
 
 ## 5. Background Jobs
 
-Two jobs. Both run inside the `neo serve` process on configurable schedules.
+Neo runs background jobs inside the active server process. MCP and REST both run
+the consolidation, resolution, and discovery schedulers when enabled.
 
-### Contemplation Loop
+### Post-Consolidation Contemplation
 
-Runs on an interval (default: configurable minutes).
+Runs immediately after a consolidation pass when `NEO_CONTEMPLATION_ENABLED` is
+true.
 
 Scans for structural signals — recently added nodes and isolated nodes with no sparks. For each candidate, calls the spark LLM to generate 0–3 sparks representing genuine gaps, tensions, or open questions. Biased toward returning zero — only emits a spark if it is genuinely worth an agent's time.
 
@@ -176,7 +178,8 @@ The capable model only touches a small, curated subset the fast model has alread
 
 ```
 create_node()
-    → contemplation loop notices structural gap
+    → consolidation runs
+    → post-consolidation contemplation notices structural gap
     → spark generated with description and priority
     → agent calls get_sparks() → sees agenda
     → investigate_spark or background resolver runs the same pipeline

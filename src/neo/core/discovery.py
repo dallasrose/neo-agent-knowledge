@@ -52,6 +52,31 @@ _YT_CHANNEL_RSS  = "https://www.youtube.com/feeds/videos.xml?channel_id={id}"
 _YT_PLAYLIST_RSS = "https://www.youtube.com/feeds/videos.xml?playlist_id={id}"
 _MAX_SOURCE_TEXT_CHARS = 12000
 _MAX_TITLE_WORDS = 12
+_FOCUS_STOPWORDS = {
+    "about", "after", "agent", "agents", "and", "are", "autonomous", "before",
+    "from", "general", "interview", "into", "lessons", "research", "that",
+    "the", "their", "this", "with", "your",
+}
+_DURABLE_SIGNAL_TERMS = {
+    "architecture", "benchmark", "boundary", "capability", "constraint",
+    "deploy", "deployment", "determinism", "enables", "evidence", "framework",
+    "governance", "guardrail", "guardrails", "latency", "model", "monitoring",
+    "monetizing", "need", "needs", "orchestration", "pattern", "performance",
+    "pipeline", "pricing", "provenance", "quality", "requires", "risk",
+    "routing", "sandboxing", "security", "should", "system", "throughput",
+    "tracking", "tradeoff", "workflow", "workflows",
+}
+_DOMAIN_TERMS = {
+    "agent", "agentic", "agents", "ai", "autonomy", "autonomous", "code",
+    "coding", "llm", "llms", "model", "models", "multi-agent", "software",
+}
+_LOW_VALUE_PATTERNS = (
+    r"\b(ad read|sponsor|sponsored|new sponsor|promo code|discount code)\b",
+    r"\b(like and subscribe|subscribe to|hit the bell)\b",
+    r"\b(mail\s*trap|transactional and promotional email)\b",
+    r"\b(by the way|why is everyone|going to be proud of me|making that joke)\b",
+    r"\b(i don't have a psychosis|i thought you were|i think i do one pun)\b",
+)
 
 
 # ── XML helpers ───────────────────────────────────────────────────────────────
@@ -130,23 +155,70 @@ def _sentence_units(text: str) -> list[str]:
     ]
 
 
+def _focus_terms(agent_focus: str) -> set[str]:
+    terms = {
+        term
+        for term in re.findall(r"[a-z][a-z0-9+-]{2,}", (agent_focus or "").lower())
+        if term not in _FOCUS_STOPWORDS
+    }
+    return terms | _DOMAIN_TERMS
+
+
+def _is_durable_finding(*, title: str, summary: str, content: str, agent_focus: str = "") -> bool:
+    text = _clean_source_text(" ".join([title, summary, content]))
+    words = text.split()
+    if len(words) < 8:
+        return False
+
+    lowered = text.lower()
+    if any(re.search(pattern, lowered) for pattern in _LOW_VALUE_PATTERNS):
+        return False
+
+    # Reject transcript banter and host chatter unless it contains an actual
+    # reusable claim. This catches jokes, asides, and conversational fragments.
+    first_personish = re.search(r"\b(i|i'm|i've|we|we're|you|your)\b", lowered)
+    terms = set(re.findall(r"[a-z][a-z0-9+-]{2,}", lowered))
+    has_signal = bool(terms & _DURABLE_SIGNAL_TERMS)
+    if first_personish and not has_signal:
+        return False
+
+    focus = _focus_terms(agent_focus)
+    if agent_focus and not (terms & focus):
+        return False
+    if not has_signal and len(terms & _DOMAIN_TERMS) < 2:
+        return False
+
+    # Pure questions are spark material, not findings extracted from sources.
+    if text.endswith("?") and not has_signal:
+        return False
+
+    return True
+
+
 def _fallback_findings(
     *,
     source_title: str,
     source_text: str,
     max_findings: int,
     confidence: float,
+    agent_focus: str = "",
 ) -> list[dict[str, Any]]:
     units = _sentence_units(source_text)
     findings: list[dict[str, Any]] = []
-    for unit in units[:max_findings]:
+    for unit in units:
         index = len(findings) + 1
+        title = _title_from_content(unit, source_title, index)
+        summary = _summarize_text(unit)
+        if not _is_durable_finding(title=title, summary=summary, content=unit, agent_focus=agent_focus):
+            continue
         findings.append({
-            "title": _title_from_content(unit, source_title, index),
-            "summary": _summarize_text(unit),
+            "title": title,
+            "summary": summary,
             "content": unit,
             "confidence": confidence,
         })
+        if len(findings) >= max_findings:
+            break
     return findings
 
 
@@ -157,6 +229,7 @@ def _validated_findings(
     fallback_text: str,
     max_findings: int,
     confidence: float,
+    agent_focus: str = "",
 ) -> list[dict[str, Any]]:
     if not isinstance(raw_findings, list):
         return []
@@ -172,6 +245,8 @@ def _validated_findings(
         if not title or _source_like_title(title, source_title):
             title = _title_from_content(content, source_title, index)
         summary = _clean_source_text(str(raw.get("summary") or "")) or _summarize_text(content)
+        if not _is_durable_finding(title=title, summary=summary, content=content, agent_focus=agent_focus):
+            continue
         raw_confidence = raw.get("confidence", confidence)
         try:
             finding_confidence = max(0.0, min(1.0, float(raw_confidence)))
@@ -192,6 +267,7 @@ def _validated_findings(
         source_text=fallback_text,
         max_findings=max_findings,
         confidence=confidence,
+        agent_focus=agent_focus,
     )
 
 
@@ -229,6 +305,9 @@ Rules:
 - Each finding title must describe the knowledge claim itself.
 - Do not use the source title as a finding title.
 - Prefer specific, reusable claims over episode/article framing.
+- Reject jokes, banter, asides, ad reads, sponsor mentions, intros/outros, and meta-conversation.
+- Reject product marketing unless it directly supports the research focus.
+- If the source has no durable knowledge relevant to the research focus, return [].
 - Return between 1 and {max_findings} findings.
 
 Respond only as JSON:
@@ -253,9 +332,9 @@ Source text:
                     fallback_text=clipped,
                     max_findings=max_findings,
                     confidence=confidence,
+                    agent_focus=agent_focus,
                 )
-                if findings:
-                    return findings
+                return findings
         except Exception as exc:
             logger.debug("LLM source finding extraction failed, using fallback: %s", exc)
 
@@ -264,6 +343,7 @@ Source text:
         source_text=clipped,
         max_findings=max_findings,
         confidence=confidence,
+        agent_focus=agent_focus,
     )
 
 

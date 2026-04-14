@@ -41,6 +41,34 @@ async def lifespan(app: FastAPI):
         scheduler.start()
     app.state.neo_scheduler = scheduler
 
+    resolution_sched = None
+    if settings.resolution_enabled:
+        from neo.core.resolution_scheduler import ResolutionScheduler
+        from neo.core.resolver import ResolutionLLM, SparkResolver
+        from neo.core.web_search import NullWebSearch, WebSearchClient
+
+        if settings.llm_configured_for("resolution"):
+            web_search = (
+                WebSearchClient(settings.search_provider, settings.search_api_key)
+                if settings.search_api_key
+                else NullWebSearch()
+            )
+            resolution_llm = ResolutionLLM(
+                api_key=settings.llm_api_key_for("resolution"),
+                model=settings.llm_model_for("resolution"),
+                base_url=settings.llm_base_url_for("resolution"),
+                provider=settings.llm_provider_for("resolution"),
+            )
+            resolution_sched = ResolutionScheduler(
+                api,
+                SparkResolver(api, resolution_llm, web_search),
+                agent_id=agent["id"],
+                interval_minutes=settings.resolution_interval_minutes,
+                batch_size=settings.resolution_batch_size,
+            )
+            resolution_sched.start()
+    app.state.neo_resolution = resolution_sched
+
     discovery_sched = None
     if settings.discovery_enabled:
         from neo.core.youtube import YouTubeSearchClient, EchoSearchAsYouTube
@@ -83,6 +111,8 @@ async def lifespan(app: FastAPI):
     finally:
         if scheduler is not None:
             await scheduler.stop()
+        if resolution_sched is not None:
+            await resolution_sched.stop()
         if discovery_sched is not None:
             await discovery_sched.stop()
         await close_db()

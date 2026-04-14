@@ -63,7 +63,9 @@ neo setup --provider ollama --model llama3.2 --non-interactive
 
 `neo setup` configures Neo itself and initializes the database schema. It does
 not create or configure an agent node; the agent does that for itself when it
-connects.
+connects. When an LLM is configured, setup enables background spark resolution
+automatically. Resolved sparks leave the active queue and strengthen the node
+they synthesize into.
 
 Launch the local REST API and visualizer:
 

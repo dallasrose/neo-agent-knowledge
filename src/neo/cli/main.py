@@ -51,6 +51,9 @@ def cli(ctx: click.Context) -> None:
 @click.option("--search-provider", default=None, help="Optional search provider, e.g. tavily or exa.")
 @click.option("--search-api-key", default=None, help="Optional search API key.")
 @click.option("--search-api-key-env", default=None, help="Read the search API key from this environment variable.")
+@click.option("--enable-resolution/--disable-resolution", default=None, help="Enable or disable background spark resolution.")
+@click.option("--resolution-interval-minutes", default=30, show_default=True, type=int)
+@click.option("--resolution-batch-size", default=3, show_default=True, type=int)
 @click.option("--non-interactive", is_flag=True, help="Do not prompt; use provided flags and defaults.")
 def setup(
     provider: str | None,
@@ -61,6 +64,9 @@ def setup(
     search_provider: str | None,
     search_api_key: str | None,
     search_api_key_env: str | None,
+    enable_resolution: bool | None,
+    resolution_interval_minutes: int,
+    resolution_batch_size: int,
     non_interactive: bool,
 ) -> None:
     """Configure this Neo installation without creating an agent node."""
@@ -82,6 +88,7 @@ def setup(
     if chosen_provider == "none":
         for key in ("NEO_LLM_PROVIDER", "NEO_LLM_MODEL", "NEO_LLM_BASE_URL", "NEO_LLM_API_KEY"):
             values.pop(key, None)
+        resolved_resolution = False if enable_resolution is None else enable_resolution
     else:
         default_model = {
             "ollama": "llama3.2",
@@ -128,6 +135,13 @@ def setup(
             values["NEO_LLM_BASE_URL"] = resolved_base_url
         if resolved_api_key:
             values["NEO_LLM_API_KEY"] = resolved_api_key
+        resolved_resolution = enable_resolution
+        if resolved_resolution is None:
+            resolved_resolution = chosen_provider == "ollama" or bool(resolved_api_key)
+
+    values["NEO_RESOLUTION_ENABLED"] = "true" if resolved_resolution else "false"
+    values["NEO_RESOLUTION_INTERVAL_MINUTES"] = str(resolution_interval_minutes)
+    values["NEO_RESOLUTION_BATCH_SIZE"] = str(resolution_batch_size)
 
     resolved_search_key = search_api_key
     if search_api_key_env:
@@ -144,6 +158,11 @@ def setup(
 
     click.echo(f"Neo config written: {config_path}")
     click.echo("Neo database initialized.")
+    click.echo(
+        "Background spark resolution: "
+        f"{'enabled' if values['NEO_RESOLUTION_ENABLED'] == 'true' else 'disabled'} "
+        f"(every {resolution_interval_minutes} min, batch {resolution_batch_size})"
+    )
     click.echo("No agent node was created. Agent roots are created when an agent connects.")
     click.echo("MCP config example:")
     click.echo('{"mcpServers":{"neo":{"command":"neo","args":["serve","--agent-name","YOUR_AGENT_NAME"]}}}')
@@ -327,6 +346,9 @@ def status() -> None:
             "llm_provider": settings.llm_provider_for("resolution"),
             "llm_model": settings.llm_model_for("resolution"),
             "llm_configured": settings.llm_configured_for("resolution"),
+            "resolution_enabled": settings.resolution_enabled,
+            "resolution_interval_minutes": settings.resolution_interval_minutes,
+            "resolution_batch_size": settings.resolution_batch_size,
             "consolidation_enabled": settings.consolidation_enabled,
             "rest_host": settings.rest_host,
             "rest_port": settings.rest_port,

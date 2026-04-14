@@ -462,6 +462,9 @@ NEO_LLM_BASE_URL               shared endpoint
 NEO_LLM_API_KEY                shared API key
 NEO_LLM_SPARK_*                optional spark-generation overrides
 NEO_LLM_RESOLUTION_*           optional spark-resolution overrides
+NEO_RESOLUTION_ENABLED         setup enables this when an LLM is configured
+NEO_RESOLUTION_INTERVAL_MINUTES default: 30
+NEO_RESOLUTION_BATCH_SIZE      default: 3
 NEO_LLM_CONSOLIDATION_*        optional consolidation overrides
 NEO_CONSOLIDATION_SCHEDULE     default: 0 */6 * * *
 NEO_CONSOLIDATION_NODE_THRESHOLD default: 20

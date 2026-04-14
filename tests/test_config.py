@@ -53,8 +53,31 @@ def test_setup_configures_neo_without_agent_identity(tmp_path, monkeypatch) -> N
     assert "NEO_LLM_PROVIDER=ollama" in content
     assert "NEO_LLM_MODEL=llama3.2" in content
     assert "NEO_LLM_BASE_URL=http://127.0.0.1:11434/v1" in content
+    assert "NEO_RESOLUTION_ENABLED=true" in content
+    assert "NEO_RESOLUTION_INTERVAL_MINUTES=30" in content
+    assert "NEO_RESOLUTION_BATCH_SIZE=3" in content
     assert "NEO_AGENT_NAME" not in content
     assert "No agent node was created" in result.output
+
+
+def test_setup_disables_resolution_without_llm(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / ".neo.env"
+    monkeypatch.setattr("neo.cli.main.get_config_env_path", lambda: config_path)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "setup",
+            "--provider",
+            "none",
+            "--non-interactive",
+        ],
+    )
+
+    assert result.exit_code == 0
+    content = config_path.read_text()
+    assert "NEO_LLM_PROVIDER" not in content
+    assert "NEO_RESOLUTION_ENABLED=false" in content
 
 
 def test_default_cli_launches_visualizer(monkeypatch) -> None:

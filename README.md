@@ -252,11 +252,11 @@ NEO_LLM_RELATIONSHIP_BASE_URL=https://api.minimax.io/anthropic
 NEO_LLM_RELATIONSHIP_API_KEY=...
 ```
 
-Install tiers:
+Install tiers from GitHub:
 
 ```bash
-pip install neo-agent-knowledge            # SQLite + MCP + REST + visualizer + LLMs + YouTube
-pip install neo-agent-knowledge[postgres]  # PostgreSQL + pgvector
+uv tool install 'neo-agent-knowledge @ git+https://github.com/dallasrose/neo-agent-knowledge.git'
+uv tool install 'neo-agent-knowledge[postgres] @ git+https://github.com/dallasrose/neo-agent-knowledge.git'
 ```
 
 ## Local Development

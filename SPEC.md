@@ -342,19 +342,20 @@ from `/api/graph`.
 
 ## 11. Installation
 
-```
-pip install neo-agent-knowledge SQLite + MCP + REST + visualiser
-                                OpenAI-compatible embeddings
-                                Anthropic-compatible LLMs
-                                OpenAI-compatible/local LLM servers
-                                spark generation and resolution
-                                YouTube transcript ingestion
-                                mock embeddings when no API key is set
+```bash
+uv tool install 'neo-agent-knowledge @ git+https://github.com/dallasrose/neo-agent-knowledge.git'
+# SQLite + MCP + REST + visualiser
+# OpenAI-compatible embeddings
+# Anthropic-compatible LLMs
+# OpenAI-compatible/local LLM servers
+# spark generation and resolution
+# YouTube transcript ingestion
+# mock embeddings when no API key is set
 
-pip install neo-agent-knowledge[postgres]
-                                adds psycopg + pgvector
-                                production-scale storage backend
-                                set NEO_DATABASE_URL
+uv tool install 'neo-agent-knowledge[postgres] @ git+https://github.com/dallasrose/neo-agent-knowledge.git'
+# adds psycopg + pgvector
+# production-scale storage backend
+# set NEO_DATABASE_URL
 ```
 
 Zero-config minimum works out of the box. Cloud/local model capabilities unlock

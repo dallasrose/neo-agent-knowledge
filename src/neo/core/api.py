@@ -649,19 +649,12 @@ class NeoAPI:
         activity = await self.store.get_activity(agent_id, since_dt)
         agent = await self.store.get_agent(agent_id)
         config = (agent.get("config") or {}) if agent else {}
-        # Strip large fields (content, embedding) from recent_nodes to keep the
-        # MCP response small enough for stdio transport (~64 KB limit in most clients).
-        _OMIT = {"content", "embedding"}
-        recent_nodes_slim = [
-            {k: v for k, v in node.items() if k not in _OMIT}
-            for node in activity["recent_nodes"]
-        ]
         return {
             "period": {"since": since_dt.isoformat(), "until": datetime.now(timezone.utc).isoformat()},
             "root_node_id": config.get("root_node_id"),
             "agents_root_node_id": config.get("agents_root_node_id"),
             "counts": activity["counts"],
-            "recent_nodes": recent_nodes_slim,
+            "recent_nodes": activity["recent_nodes"],
             "active_sparks": activity["active_sparks"],
             "contradictions": activity["contradictions"],
             "domains_active": activity["domains_active"],

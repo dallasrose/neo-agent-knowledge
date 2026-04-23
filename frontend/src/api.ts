@@ -8,7 +8,7 @@ async function get<T>(path: string): Promise<T> {
   return res.json() as Promise<T>
 }
 
-export async function fetchGraph(limit = 500): Promise<GraphData> {
+export async function fetchGraph(limit = 100000): Promise<GraphData> {
   return get<GraphData>(`/graph?limit=${limit}`)
 }
 

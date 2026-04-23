@@ -180,7 +180,7 @@ async def get_branch(node_id: str, max_depth: int = Query(default=2, ge=0, le=8)
 
 @router.get("/graph")
 async def get_graph(
-    limit: int = Query(default=500, ge=1, le=2000),
+    limit: int = Query(default=100000, ge=1),
     api: NeoAPI = Depends(get_api),
 ) -> dict:
     """Return all nodes, edges, and active sparks for graph rendering."""

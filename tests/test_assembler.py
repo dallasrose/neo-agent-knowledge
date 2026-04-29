@@ -31,6 +31,8 @@ async def test_assembler_pipeline_ranks_and_expands(session_factory):
     )
 
     assert result["nodes"][0]["title"] == "Root"
+    assert result["nodes"][0]["node_type"] == "concept"
+    assert result["nodes"][0]["similarity"] > 0
     assert len(result["edges"]) == 2
     assert len(result["contradictions"]) == 1
     assert result["sparks"][0]["description"] == "Need deeper evidence"

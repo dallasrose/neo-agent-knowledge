@@ -168,6 +168,33 @@ def setup(
     click.echo('{"mcpServers":{"neo":{"command":"neo","args":["serve","--agent-name","YOUR_AGENT_NAME"]}}}')
 
 
+@cli.group()
+def hermes() -> None:
+    """Hermes Agent integration commands."""
+
+
+@hermes.command("install")
+@click.option("--hermes-home", default=None, help="Hermes home directory. Defaults to $HERMES_HOME or ~/.hermes.")
+@click.option("--agent-name", default="default", show_default=True, help="Neo agent identity to use from Hermes.")
+@click.option("--set-active", is_flag=True, help="Write an activation hint for single-provider Hermes installs.")
+@click.option("--force", is_flag=True, help="Overwrite existing Neo Hermes plugin files and config.")
+def hermes_install(hermes_home: str | None, agent_name: str, set_active: bool, force: bool) -> None:
+    """Install Neo's Hermes memory-provider plugin shim."""
+    import os
+    from pathlib import Path
+
+    from neo.integrations.hermes.installer import install_hermes_plugin
+
+    home = Path(hermes_home or os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+    result = install_hermes_plugin(home, agent_name=agent_name, set_active=set_active, force=force)
+    click.echo(f"Installed Neo Hermes plugin: {result['plugin_dir']}")
+    click.echo(f"Neo Hermes config: {result['config_path']}")
+    if set_active:
+        click.echo("Activation hint written. If you use Honcho, prefer Hermes multi-provider support instead of replacing it.")
+    else:
+        click.echo("Neo was installed but not activated, preserving any existing memory provider such as Honcho.")
+
+
 @cli.command("mcp-config")
 @click.option("--name", default="neo", show_default=True, help="MCP server name.")
 @click.option("--command", default="neo", show_default=True, help="Command used by the agent host.")

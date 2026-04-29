@@ -119,6 +119,19 @@ neo mcp-config
 Neo starts when the agent launches the MCP server. No separate daemon is
 required for stdio mode.
 
+### Hermes memory provider
+
+Neo can also install a Hermes memory-provider shim for automatic semantic recall:
+
+```bash
+neo hermes install --agent-name atlas
+```
+
+This installs `$HERMES_HOME/plugins/neo/` and writes `$HERMES_HOME/neo.json`.
+Neo is semantic memory, not episodic chat memory; if you use Honcho or another
+episodic provider, keep it and run Neo alongside it using Hermes multi-provider
+support. See [`docs/hermes-memory-provider.md`](docs/hermes-memory-provider.md).
+
 Shared Neo settings such as the database, LLM, search keys, and discovery
 configuration live in Neo's own config file, not in the agent platform.
 

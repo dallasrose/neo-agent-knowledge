@@ -90,7 +90,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-neo = ["static/**/*"]
+neo = ["static/**/*", "integrations/hermes/plugin_template/**/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

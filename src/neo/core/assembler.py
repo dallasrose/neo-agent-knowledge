@@ -79,9 +79,14 @@ class WorkingMemoryAssembler:
                 {
                     "id": node["id"],
                     "title": node["title"],
+                    "node_type": node.get("node_type"),
                     "summary": node["summary"],
                     "confidence": node["confidence"],
                     "domain": node.get("domain"),
+                    "similarity": next(
+                        (seed.get("similarity", 0.0) for seed in seeds if seed["id"] == node["id"]),
+                        0.0,
+                    ),
                 }
                 for node in chosen
             ],

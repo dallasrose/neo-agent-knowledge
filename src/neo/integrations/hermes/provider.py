@@ -79,10 +79,12 @@ class NeoMemoryProvider(MemoryProvider):
 
     def system_prompt_block(self) -> str:
         return (
-            "Neo semantic memory is available. Neo stores durable domain/research knowledge "
-            "(concepts, theories, findings, syntheses, contradictions, sparks), not chat history. "
-            "When Neo injects a signal, treat it as background context and retrieve details before "
-            "making domain-heavy recommendations. Write to Neo only for durable semantic knowledge."
+            "Semantic research memory is available through Neo. Treat it as your own durable "
+            "research memory: concepts, theories, findings, syntheses, contradictions, and open "
+            "questions, not chat history. When a signal appears, think of it as 'I remember "
+            "researching something relevant' and retrieve details before making domain-heavy "
+            "recommendations. When the user gives a source link to research or remember, use "
+            "neo_ingest_url. Write only durable semantic knowledge, not ordinary conversation."
         )
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
@@ -134,6 +136,67 @@ class NeoMemoryProvider(MemoryProvider):
                 },
             },
             {
+                "name": "neo_investigate_spark",
+                "description": "Run Neo's intelligent spark investigation pipeline with internal recall, web search when configured, candidate resolutions, and a judge.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "spark_id": {"type": "string"},
+                        "mode": {
+                            "type": "string",
+                            "enum": ["preview", "apply"],
+                            "default": "apply",
+                        },
+                    },
+                    "required": ["spark_id"],
+                },
+            },
+            {
+                "name": "neo_resolve_spark",
+                "description": "Mark a spark/open question resolved after you have researched it and stored or identified the durable answer nodes.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "spark_id": {"type": "string"},
+                        "node_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Neo node IDs that resolve this spark.",
+                        },
+                        "notes": {"type": "string"},
+                    },
+                    "required": ["spark_id"],
+                },
+            },
+            {
+                "name": "neo_abandon_spark",
+                "description": "Close a spark/open question as not useful or not currently answerable.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "spark_id": {"type": "string"},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["spark_id"],
+                },
+            },
+            {
+                "name": "neo_ingest_url",
+                "description": "Read a URL and store durable research findings in semantic memory. Use when the user asks you to research or remember a source link.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string"},
+                        "title": {"type": "string"},
+                        "domain": {"type": "string"},
+                        "query_focus": {"type": "string"},
+                        "preview": {"type": "boolean", "default": False},
+                        "max_findings": {"type": "integer", "default": 0, "description": "Optional total ceiling. 0 or omitted means no artificial source-level cap; long sources are chunked and deduped."},
+                    },
+                    "required": ["url"],
+                },
+            },
+            {
                 "name": "neo_remember",
                 "description": "Store durable semantic knowledge in Neo. Use only for research/domain knowledge, not ordinary chat history.",
                 "parameters": {
@@ -166,6 +229,42 @@ class NeoMemoryProvider(MemoryProvider):
                     self._api.get_sparks(agent_id=self._agent_id, limit=int(args.get("limit") or 5))
                 )
                 return json.dumps({"ok": True, "sparks": result}, default=str)
+            if tool_name == "neo_investigate_spark":
+                result = self._investigate_spark(
+                    spark_id=args["spark_id"],
+                    mode=args.get("mode") or "apply",
+                )
+                return json.dumps({"ok": True, "result": result}, default=str)
+            if tool_name == "neo_resolve_spark":
+                result = self._run(
+                    self._api.resolve_spark(
+                        spark_id=args["spark_id"],
+                        node_ids=args.get("node_ids") or [],
+                        notes=args.get("notes"),
+                    )
+                )
+                return json.dumps({"ok": True, "result": result}, default=str)
+            if tool_name == "neo_abandon_spark":
+                result = self._run(
+                    self._api.abandon_spark(
+                        spark_id=args["spark_id"],
+                        reason=args.get("reason"),
+                    )
+                )
+                return json.dumps({"ok": True, "result": result}, default=str)
+            if tool_name == "neo_ingest_url":
+                result = self._run(
+                    self._api.ingest_source_url(
+                        agent_id=self._agent_id,
+                        url=args["url"],
+                        title=args.get("title"),
+                        domain=args.get("domain"),
+                        query_focus=args.get("query_focus"),
+                        preview=bool(args.get("preview") or False),
+                        max_findings=(int(args["max_findings"]) if args.get("max_findings") is not None else None),
+                    )
+                )
+                return json.dumps({"ok": True, "result": result}, default=str)
             if tool_name == "neo_remember":
                 result = self._run(
                     self._api.store_node(
@@ -198,6 +297,36 @@ class NeoMemoryProvider(MemoryProvider):
                 scope=self._config.scope,
             )
         )
+
+    def _investigate_spark(self, *, spark_id: str, mode: str) -> dict[str, Any]:
+        if mode not in {"preview", "apply"}:
+            raise ValueError("mode must be 'preview' or 'apply'")
+
+        from neo.config import settings
+        from neo.core.resolver import ResolutionLLM, SparkResolver
+        from neo.core.web_search import NullWebSearch, WebSearchClient
+
+        if not settings.llm_configured_for("resolution"):
+            raise RuntimeError("Neo spark investigation requires NEO_LLM_MODEL plus a configured cloud key or local base URL")
+
+        sparks = self._run(self._api.get_sparks(agent_id=self._agent_id, status="", limit=5000))
+        spark = next((item for item in sparks if item.get("id") == spark_id), None)
+        if spark is None:
+            raise ValueError(f"Spark {spark_id} not found")
+        agent = self._run(self._api.store.get_agent(self._agent_id))
+        web_search = (
+            WebSearchClient(settings.search_provider, settings.search_api_key)
+            if settings.search_configured()
+            else NullWebSearch()
+        )
+        llm = ResolutionLLM(
+            api_key=settings.llm_api_key_for("resolution"),
+            model=settings.llm_model_for("resolution"),
+            base_url=settings.llm_base_url_for("resolution"),
+            provider=settings.llm_provider_for("resolution"),
+        )
+        resolver = SparkResolver(self._api, llm, web_search)
+        return self._run(resolver.resolve(spark, agent, mode=mode, trigger="hermes_memory"))
 
     def _run(self, awaitable: Awaitable[Any]) -> Any:
         return self._bridge.run(awaitable)

@@ -3,7 +3,7 @@ name = "neo-agent-knowledge"
 version = "0.1.1"
 description = "Semantic memory system for AI agents"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [
@@ -22,6 +22,7 @@ classifiers = [
     "Framework :: FastAPI",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Database",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",

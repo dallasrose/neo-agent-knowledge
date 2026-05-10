@@ -16,6 +16,7 @@ class ResolutionScheduler:
         interval_minutes: int = 30,
         batch_size: int = 3,
         min_priority: float = 0.5,
+        max_runtime_seconds: int = 120,
     ) -> None:
         self.api = api
         self.resolver = resolver
@@ -23,6 +24,7 @@ class ResolutionScheduler:
         self.interval = interval_minutes * 60
         self.batch_size = batch_size
         self.min_priority = min_priority
+        self.max_runtime_seconds = max(1, max_runtime_seconds)
         self._task: asyncio.Task | None = None
 
     def start(self) -> asyncio.Task:
@@ -56,10 +58,21 @@ class ResolutionScheduler:
         if not sparks:
             return
         logger.info("Resolution: %d sparks to process", len(sparks))
+        deadline = asyncio.get_running_loop().time() + self.max_runtime_seconds
         for spark in sparks:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                logger.info("Resolution: batch timebox exhausted before spark %s", spark.get("id"))
+                break
             try:
-                result = await self.resolver.resolve(spark, agent, mode="apply", trigger="background")
+                result = await asyncio.wait_for(
+                    self.resolver.resolve(spark, agent, mode="apply", trigger="background"),
+                    timeout=max(1, remaining),
+                )
                 status = "resolved" if result.get("success") else "failed"
                 logger.info("Resolution: spark %s %s", result.get("spark_id"), status)
+            except asyncio.TimeoutError:
+                logger.warning("Resolution: spark %s timed out after %.1fs", spark.get("id"), max(1, remaining))
+                break
             except Exception as e:
                 logger.warning("Resolution: spark %s error: %s", spark.get("id"), e)

@@ -51,6 +51,9 @@ _YT_NS = {
 _YT_CHANNEL_RSS  = "https://www.youtube.com/feeds/videos.xml?channel_id={id}"
 _YT_PLAYLIST_RSS = "https://www.youtube.com/feeds/videos.xml?playlist_id={id}"
 _MAX_SOURCE_TEXT_CHARS = 12000
+_EXTRACTION_CHUNK_CHARS = 12000
+_DEFAULT_FINDINGS_PER_PASS = 8
+_MAX_EXTRACTION_PASSES_PER_CHUNK = 25  # runaway guard, not a normal finding target
 _MAX_TITLE_WORDS = 12
 _FOCUS_STOPWORDS = {
     "about", "after", "agent", "agents", "and", "are", "autonomous", "before",
@@ -58,17 +61,29 @@ _FOCUS_STOPWORDS = {
     "the", "their", "this", "with", "your",
 }
 _DURABLE_SIGNAL_TERMS = {
+    # Technical / systems research signals
     "architecture", "benchmark", "boundary", "capability", "constraint",
     "deploy", "deployment", "determinism", "enables", "evidence", "framework",
     "governance", "guardrail", "guardrails", "latency", "model", "monitoring",
     "monetizing", "need", "needs", "orchestration", "pattern", "performance",
-    "pipeline", "pricing", "provenance", "quality", "requires", "risk",
-    "routing", "sandboxing", "security", "should", "system", "throughput",
-    "tracking", "tradeoff", "workflow", "workflows",
+    "pipeline", "provenance", "quality", "requires", "risk", "routing",
+    "sandboxing", "security", "should", "system", "throughput", "tracking",
+    "tradeoff", "workflow", "workflows",
+    # Business / brand / creative strategy signals
+    "audience", "brand", "brands", "branding", "campaign", "codes", "community", "content",
+    "conversion", "creative", "customer", "customers", "demand", "differentiation",
+    "distribution", "experience", "funnel", "identity", "ladder", "launch", "market", "narrative",
+    "positioning", "premium", "pricing", "product", "products", "scarce", "scarcity", "status",
+    "strategy", "tactic", "tactics", "value", "visual",
 }
 _DOMAIN_TERMS = {
+    # AI/software domains
     "agent", "agentic", "agents", "ai", "autonomy", "autonomous", "code",
     "coding", "llm", "llms", "model", "models", "multi-agent", "software",
+    # General business/creative domains; prevents non-AI research from being
+    # over-filtered as if every durable claim had to be about agent systems.
+    "audience", "brand", "brands", "branding", "business", "content", "creative",
+    "customer", "customers", "market", "positioning", "premium", "product", "strategy",
 }
 _LOW_VALUE_PATTERNS = (
     r"\b(ad read|sponsor|sponsored|new sponsor|promo code|discount code)\b",
@@ -94,6 +109,10 @@ async def _fetch_xml(url: str) -> str:
 def _clean_source_text(text: str) -> str:
     text = unescape(text or "")
     text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"https?://\S+", " ", text)
+    text = re.sub(r"\[?\b\d{1,2}:\d{2}(?::\d{2})?\]?", " ", text)
+    text = re.sub(r"(?m)^\s*(speaker\s*\d+|host|guest|interviewer|interviewee)\s*:\s*", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?i)\b(transcript|auto-generated transcript|foreign|music|applause)\b", " ", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
@@ -119,6 +138,35 @@ def _summarize_text(text: str, max_words: int = 28) -> str:
     if len(words) <= max_words:
         return " ".join(words)
     return " ".join(words[:max_words]) + "..."
+
+
+def build_recall_cues(*parts: str, max_cues: int = 6) -> list[str]:
+    """Build compact internal phrases for later associative recall."""
+
+    text = _clean_source_text(" ".join(part for part in parts if part))
+    terms = [
+        term
+        for term in re.findall(r"[a-z][a-z0-9+-]{2,}", text.lower())
+        if term not in _FOCUS_STOPWORDS and term not in {"source", "finding", "knowledge"}
+    ]
+    cues: list[str] = []
+    seen: set[str] = set()
+    words = text.split()
+    if words:
+        first = " ".join(words[: min(8, len(words))]).strip(" ,.;:")
+        if first:
+            cues.append(first.lower())
+            seen.add(first.lower())
+    for size in (3, 2):
+        for i in range(0, max(0, len(terms) - size + 1)):
+            cue = " ".join(terms[i:i + size])
+            if cue in seen:
+                continue
+            cues.append(cue)
+            seen.add(cue)
+            if len(cues) >= max_cues:
+                return cues
+    return cues[:max_cues]
 
 
 def _title_from_content(content: str, source_title: str, index: int) -> str:
@@ -153,6 +201,66 @@ def _sentence_units(text: str) -> list[str]:
         for i in range(0, min(len(words), chunk_size * 4), chunk_size)
         if len(words[i:i + chunk_size]) >= 12
     ]
+
+
+def _source_text_chunks(text: str, *, max_chars: int = _EXTRACTION_CHUNK_CHARS) -> list[str]:
+    cleaned = _clean_source_text(text)
+    if not cleaned:
+        return []
+    if len(cleaned) <= max_chars:
+        return [cleaned]
+
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for word in cleaned.split():
+        addition = len(word) + (1 if current else 0)
+        if current and current_len + addition > max_chars:
+            chunks.append(" ".join(current))
+            current = [word]
+            current_len = len(word)
+        else:
+            current.append(word)
+            current_len += addition
+    if current:
+        chunks.append(" ".join(current))
+    return chunks
+
+
+def _finding_limit(max_findings: int | None) -> int | None:
+    if max_findings is None:
+        return None
+    try:
+        value = int(max_findings)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _dedupe_findings(findings: list[dict[str, Any]], *, max_findings: int | None = None) -> list[dict[str, Any]]:
+    limit = _finding_limit(max_findings)
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for finding in findings:
+        key = _normalize_titleish(" ".join([
+            str(finding.get("title") or ""),
+            str(finding.get("summary") or ""),
+            str(finding.get("content") or "")[:180],
+        ]))
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(finding)
+        if limit is not None and len(deduped) >= limit:
+            break
+    return deduped
+
+
+def _chunk_metadata(findings: list[dict[str, Any]], *, chunk_index: int, chunks_total: int) -> list[dict[str, Any]]:
+    for finding in findings:
+        finding["chunk_index"] = chunk_index
+        finding["chunks_total"] = chunks_total
+    return findings
 
 
 def _focus_terms(agent_focus: str) -> set[str]:
@@ -199,10 +307,11 @@ def _fallback_findings(
     *,
     source_title: str,
     source_text: str,
-    max_findings: int,
+    max_findings: int | None,
     confidence: float,
     agent_focus: str = "",
 ) -> list[dict[str, Any]]:
+    limit = _finding_limit(max_findings)
     units = _sentence_units(source_text)
     findings: list[dict[str, Any]] = []
     for unit in units:
@@ -216,8 +325,9 @@ def _fallback_findings(
             "summary": summary,
             "content": unit,
             "confidence": confidence,
+            "recall_cues": build_recall_cues(title, summary, unit),
         })
-        if len(findings) >= max_findings:
+        if limit is not None and len(findings) >= limit:
             break
     return findings
 
@@ -227,10 +337,11 @@ def _validated_findings(
     *,
     source_title: str,
     fallback_text: str,
-    max_findings: int,
+    max_findings: int | None,
     confidence: float,
     agent_focus: str = "",
 ) -> list[dict[str, Any]]:
+    limit = _finding_limit(max_findings)
     if not isinstance(raw_findings, list):
         return []
     findings: list[dict[str, Any]] = []
@@ -257,8 +368,9 @@ def _validated_findings(
             "summary": summary[:240],
             "content": content,
             "confidence": finding_confidence,
+            "recall_cues": _normalize_recall_cues(raw.get("recall_cues"), title, summary, content),
         })
-        if len(findings) >= max_findings:
+        if limit is not None and len(findings) >= limit:
             break
     if findings:
         return findings
@@ -271,6 +383,18 @@ def _validated_findings(
     )
 
 
+def _normalize_recall_cues(raw: Any, title: str, summary: str, content: str) -> list[str]:
+    cues: list[str] = []
+    if isinstance(raw, list):
+        for item in raw:
+            cue = _clean_source_text(str(item or "")).lower()
+            if cue and cue not in cues:
+                cues.append(cue[:120])
+    if cues:
+        return cues[:6]
+    return build_recall_cues(title, summary, content)
+
+
 async def extract_knowledge_findings(
     *,
     source_title: str,
@@ -279,36 +403,75 @@ async def extract_knowledge_findings(
     source_url: str = "",
     agent_focus: str = "",
     llm: Any | None = None,
-    max_findings: int = 4,
+    max_findings: int | None = None,
     confidence: float = 0.55,
 ) -> list[dict[str, Any]]:
     """Extract durable knowledge findings from any source text.
 
     Source title and URL are provenance. Returned finding titles describe the
     knowledge itself and intentionally avoid mirroring the article/video title.
+
+    Long sources are chunked so extraction sees the whole source. ``max_findings``
+    is an optional total ceiling; ``None`` or ``<= 0`` means no artificial
+    source-level finding cap. Each chunk is processed in continuation passes
+    until the extractor returns no new durable findings, with a high runaway
+    guard to prevent broken model loops.
     """
     cleaned = _clean_source_text(source_text)
     if not cleaned:
         return []
 
-    clipped = cleaned[:_MAX_SOURCE_TEXT_CHARS]
-    if llm is not None:
-        try:
-            prompt = f"""Extract durable knowledge findings from this {source_type} source.
+    limit = _finding_limit(max_findings)
+    chunks = _source_text_chunks(cleaned)
+    chunks_total = len(chunks)
+    all_findings: list[dict[str, Any]] = []
+
+    for chunk_index, chunk in enumerate(chunks, start=1):
+        remaining = None if limit is None else limit - len(all_findings)
+        if remaining is not None and remaining <= 0:
+            break
+        chunk_limit = _DEFAULT_FINDINGS_PER_PASS if remaining is None else min(remaining, _DEFAULT_FINDINGS_PER_PASS)
+
+        chunk_findings: list[dict[str, Any]] = []
+        guard_hit = False
+        llm_attempted = llm is not None
+        fallback_reason: str | None = None
+        if llm is not None:
+            try:
+                for pass_index in range(1, _MAX_EXTRACTION_PASSES_PER_CHUNK + 1):
+                    remaining = None if limit is None else limit - len(all_findings) - len(chunk_findings)
+                    if remaining is not None and remaining <= 0:
+                        break
+                    pass_limit = _DEFAULT_FINDINGS_PER_PASS if remaining is None else min(remaining, _DEFAULT_FINDINGS_PER_PASS)
+                    already_extracted = [
+                        f"{finding.get('title', '')}: {str(finding.get('summary') or finding.get('content') or '')[:180]}"
+                        for finding in chunk_findings
+                    ][-20:]
+                    already_text = "\n".join(f"- {claim}" for claim in already_extracted if claim.strip(": ")) or "None yet"
+                    continuation_rule = (
+                        "Return the next batch of durable findings not already listed. "
+                        "If no additional durable findings remain in this chunk, return []."
+                    )
+                    prompt = f"""Extract durable knowledge findings from this {source_type} source chunk.
 
 Source title: {source_title}
 Source URL: {source_url or "unknown"}
 Agent research focus: {agent_focus or "general durable knowledge"}
+Chunk: {chunk_index} of {chunks_total}
+Extraction pass: {pass_index}
+Already extracted from this chunk:
+{already_text}
 
 Rules:
 - Return distinct learnings, not a summary of the source.
 - Each finding title must describe the knowledge claim itself.
 - Do not use the source title as a finding title.
 - Prefer specific, reusable claims over episode/article framing.
-- Reject jokes, banter, asides, ad reads, sponsor mentions, intros/outros, and meta-conversation.
+- Capture useful information, lessons, guidance, opinions, frameworks, anti-patterns, mental models, examples, and sharp questions when they are durable and reusable.
+- Reject jokes, banter, asides, ad reads, sponsor mentions, intros/outros, repeated stories, vague motivation, generic platitudes, and meta-conversation.
 - Reject product marketing unless it directly supports the research focus.
-- If the source has no durable knowledge relevant to the research focus, return [].
-- Return between 1 and {max_findings} findings.
+- {continuation_rule}
+- Return up to {pass_limit} useful distinct findings in this pass.
 
 Respond only as JSON:
 [
@@ -316,35 +479,74 @@ Respond only as JSON:
     "title": "short claim title, max 80 characters",
     "summary": "one sentence summary",
     "content": "2-4 sentences preserving the useful knowledge",
+    "recall_cues": ["2-6 short phrases describing when this should be remembered"],
     "confidence": 0.0
   }}
 ]
 
-Source text:
-{clipped}"""
-            raw = await llm.call(prompt, max_tokens=1200)
-            start, end = raw.find("["), raw.rfind("]") + 1
-            if start >= 0 and end > start:
-                parsed = json.loads(raw[start:end])
-                findings = _validated_findings(
-                    parsed,
-                    source_title=source_title,
-                    fallback_text=clipped,
-                    max_findings=max_findings,
-                    confidence=confidence,
-                    agent_focus=agent_focus,
-                )
-                return findings
-        except Exception as exc:
-            logger.debug("LLM source finding extraction failed, using fallback: %s", exc)
+Source chunk text:
+{chunk}"""
+                    raw = await llm.call(prompt, max_tokens=max(1200, pass_limit * 350))
+                    start, end = raw.find("["), raw.rfind("]") + 1
+                    pass_findings: list[dict[str, Any]] = []
+                    if start >= 0 and end > start:
+                        parsed = json.loads(raw[start:end])
+                        pass_findings = _validated_findings(
+                            parsed,
+                            source_title=source_title,
+                            fallback_text=chunk,
+                            max_findings=pass_limit,
+                            confidence=confidence,
+                            agent_focus=agent_focus,
+                        )
+                    if not pass_findings:
+                        break
+                    before = len(chunk_findings)
+                    chunk_findings = _dedupe_findings(chunk_findings + pass_findings)
+                    if len(chunk_findings) == before:
+                        break
+                    if pass_index >= _MAX_EXTRACTION_PASSES_PER_CHUNK and limit is None:
+                        guard_hit = True
+                        break
+                    if limit is not None and len(all_findings) + len(chunk_findings) >= limit:
+                        break
+            except Exception as exc:
+                fallback_reason = f"llm_error:{type(exc).__name__}"
+                logger.debug("LLM source finding extraction failed for chunk %s/%s, using fallback: %s", chunk_index, chunks_total, exc)
 
-    return _fallback_findings(
-        source_title=source_title,
-        source_text=clipped,
-        max_findings=max_findings,
-        confidence=confidence,
-        agent_focus=agent_focus,
-    )
+        if not chunk_findings:
+            if llm_attempted and fallback_reason is None:
+                fallback_reason = "llm_returned_no_valid_findings"
+            chunk_findings = _fallback_findings(
+                source_title=source_title,
+                source_text=chunk,
+                max_findings=chunk_limit,
+                confidence=confidence,
+                agent_focus=agent_focus,
+            )
+            if llm_attempted:
+                for finding in chunk_findings:
+                    finding["llm_fallback_used"] = True
+                    finding["llm_fallback_reason"] = fallback_reason
+        if guard_hit:
+            logger.warning(
+                "source extraction continuation guard hit: source_title=%r source_type=%s source_url=%r chunk=%s/%s passes=%s findings_in_chunk=%s",
+                source_title,
+                source_type,
+                source_url,
+                chunk_index,
+                chunks_total,
+                _MAX_EXTRACTION_PASSES_PER_CHUNK,
+                len(chunk_findings),
+            )
+            for finding in chunk_findings:
+                finding["extraction_guard_hit"] = True
+                finding["extraction_passes_completed"] = _MAX_EXTRACTION_PASSES_PER_CHUNK
+
+        all_findings.extend(_chunk_metadata(chunk_findings, chunk_index=chunk_index, chunks_total=chunks_total))
+        all_findings = _dedupe_findings(all_findings, max_findings=limit)
+
+    return _dedupe_findings(all_findings, max_findings=limit)
 
 
 def append_source_provenance(content: str, parts: list[str]) -> str:
@@ -512,9 +714,18 @@ class DiscoveryJob:
     runs the autonomous search pass if the agent has a specialty set.
     """
 
-    def __init__(self, api: Any, llm: Any | None = None, yt_search: Any | None = None) -> None:
+    def __init__(
+        self,
+        api: Any,
+        llm: Any | None = None,
+        yt_search: Any | None = None,
+        *,
+        research_llm: Any | None = None,
+        ingestion_llm: Any | None = None,
+    ) -> None:
         self.api = api
-        self.llm = llm          # optional: ResolutionLLM instance for query generation
+        self.research_llm = research_llm or llm  # optional: query/source planning LLM
+        self.ingestion_llm = ingestion_llm or llm  # optional: source extraction LLM
         self.yt_search = yt_search  # optional: YouTubeSearchClient or EchoSearchAsYouTube
 
     async def run(
@@ -607,7 +818,7 @@ class DiscoveryJob:
         query_specialty = specialty
         if suggested_sources:
             query_specialty = f"{specialty}\nSuggested sources: {', '.join(suggested_sources)}"
-        queries = await _generate_search_queries(query_specialty, domains, llm=self.llm, n=4)
+        queries = await _generate_search_queries(query_specialty, domains, llm=self.research_llm, n=4)
         logger.info("Discovery (autonomous): %d queries — %s", len(queries), queries)
 
         ingested = 0
@@ -792,21 +1003,12 @@ class DiscoveryJob:
         confidence: float = 0.6
 
         try:
-            from neo.core.youtube import get_fetcher, extract_relevant_excerpt
+            from neo.core.youtube import get_fetcher
             fetcher = get_fetcher()
             loop = asyncio.get_event_loop()
             data = await loop.run_in_executor(None, lambda: fetcher.fetch(video_id))
             full_text = data["text"]
-            if len(full_text) > _MAX_SOURCE_TEXT_CHARS:
-                opening = " ".join(full_text.split()[:120])
-                relevant = extract_relevant_excerpt(
-                    full_text,
-                    specialty or title,
-                    max_chars=_MAX_SOURCE_TEXT_CHARS - len(opening) - 16,
-                )
-                source_text = f"{opening}\n\n{relevant}"
-            else:
-                source_text = full_text
+            source_text = full_text
         except Exception as exc:
             logger.info("Discovery: no transcript for %s (%s) — using description", video_id, exc)
             source_text = description or title
@@ -818,8 +1020,8 @@ class DiscoveryJob:
             source_type="youtube",
             source_url=url,
             agent_focus=specialty,
-            llm=self.llm,
-            max_findings=4,
+            llm=self.ingestion_llm,
+            max_findings=None,
             confidence=confidence,
         )
         if not findings:
@@ -854,6 +1056,13 @@ class DiscoveryJob:
                     "published_at": published_at,
                     "finding_index": index,
                     "findings_total": len(findings),
+                    "chunk_index": finding.get("chunk_index"),
+                    "chunks_total": finding.get("chunks_total"),
+                    "extraction_guard_hit": finding.get("extraction_guard_hit"),
+                    "extraction_passes_completed": finding.get("extraction_passes_completed"),
+                    "recall_cues": finding.get("recall_cues") or build_recall_cues(
+                        finding["title"], finding.get("summary", ""), finding.get("content", "")
+                    ),
                 },
                 generate_sparks=True,
                 deduplicate=True,
@@ -872,7 +1081,7 @@ class DiscoveryJob:
             source_type="rss",
             source_url=url,
             agent_focus=(agent.get("specialty") or "").strip(),
-            llm=self.llm,
+            llm=self.ingestion_llm,
             max_findings=3,
             confidence=0.5,
         )
@@ -903,6 +1112,9 @@ class DiscoveryJob:
                     "published_at": item["published_at"].isoformat() if item.get("published_at") else None,
                     "finding_index": index,
                     "findings_total": len(findings),
+                    "recall_cues": finding.get("recall_cues") or build_recall_cues(
+                        finding["title"], finding.get("summary", ""), finding.get("content", "")
+                    ),
                 },
                 generate_sparks=True,
                 deduplicate=True,

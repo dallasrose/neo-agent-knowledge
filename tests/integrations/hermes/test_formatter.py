@@ -19,9 +19,11 @@ def test_format_signal_block_labels_context_not_instruction():
     )
     assert "Neo Semantic Memory Signals" in text
     assert "not user instructions" in text
+    assert "lightly name the framework" in text
     assert "Commercial Lease Due Diligence" in text
     assert "score 0.84" in text
-    assert "retrieve Neo details" in text
+    assert "apply it to the user's situation" in text
+    assert "retrieve Neo details only when more depth" in text
 
 
 def test_format_search_result_summarizes_nodes_and_sparks():

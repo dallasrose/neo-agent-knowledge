@@ -40,7 +40,7 @@ def cli(ctx: click.Context) -> None:
 @cli.command()
 @click.option(
     "--provider",
-    type=click.Choice(["none", "ollama", "openai", "openrouter", "anthropic", "minimax"]),
+    type=click.Choice(["none", "ollama", "openai", "openrouter", "anthropic", "minimax", "gemini"]),
     default=None,
     help="LLM provider to write into Neo's user config.",
 )
@@ -81,7 +81,7 @@ def setup(
         chosen_provider = click.prompt(
             "LLM provider",
             default=values.get("NEO_LLM_PROVIDER", "ollama"),
-            type=click.Choice(["none", "ollama", "openai", "openrouter", "anthropic", "minimax"]),
+            type=click.Choice(["none", "ollama", "openai", "openrouter", "anthropic", "minimax", "gemini"]),
         )
     chosen_provider = chosen_provider or values.get("NEO_LLM_PROVIDER") or "ollama"
 
@@ -96,6 +96,7 @@ def setup(
             "openrouter": "anthropic/claude-sonnet-4",
             "anthropic": "claude-haiku-4-5",
             "minimax": "MiniMax-M2.7",
+            "gemini": "gemini-2.5-flash",
         }[chosen_provider]
         chosen_model = model
         if chosen_model is None and not non_interactive:
@@ -109,6 +110,7 @@ def setup(
                 "openai": "https://api.openai.com/v1",
                 "openrouter": "https://openrouter.ai/api/v1",
                 "minimax": "https://api.minimax.io/anthropic",
+                "gemini": "https://generativelanguage.googleapis.com/v1beta",
             }
             resolved_base_url = values.get("NEO_LLM_BASE_URL") or defaults.get(chosen_provider)
             if not non_interactive and resolved_base_url:

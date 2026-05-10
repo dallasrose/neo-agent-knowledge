@@ -7,7 +7,7 @@ import pytest
 from neo.core.api import NeoAPI
 from neo.core.relationships import RelationshipDecision
 from neo.core.sparks import SparkGenerator
-from neo.runtime import _migrate_agent_name_if_needed
+from neo.runtime import _migrate_agent_name_if_needed, ensure_agent_root_hierarchy
 from neo.store.sqlite import SQLiteStore
 
 
@@ -124,6 +124,30 @@ async def test_agent_name_migration_ignores_bootstrap_system_nodes(session_facto
     assert await store.get_agent_by_name("default") is None
     assert (await store.get_agent_by_name("hermes"))["id"] == default_agent["id"]
     assert (await store.get_node(knowledge["id"]))["agent_id"] == migrated["id"]
+
+
+@pytest.mark.asyncio
+async def test_agent_root_hierarchy_uses_shared_agents_root(session_factory):
+    store = SQLiteStore(session_factory)
+    atlas = await store.get_or_create_agent("atlas")
+    wave = await store.get_or_create_agent("wave")
+
+    atlas_root_id = await ensure_agent_root_hierarchy(store, atlas)
+    wave_root_id = await ensure_agent_root_hierarchy(store, wave)
+    atlas = await store.get_agent(atlas["id"])
+    wave = await store.get_agent(wave["id"])
+
+    agents_root_id = atlas["config"]["agents_root_node_id"]
+    assert wave["config"]["agents_root_node_id"] == agents_root_id
+    assert "neo_instructions_node_id" not in atlas["config"]
+    assert "neo_instructions_node_id" not in wave["config"]
+    assert (await store.get_node(atlas_root_id))["parent_id"] == agents_root_id
+    assert (await store.get_node(wave_root_id))["parent_id"] == agents_root_id
+
+    atlas_nodes = await store.get_nodes_by_agent(atlas["id"], limit=20)
+    wave_nodes = await store.get_nodes_by_agent(wave["id"], limit=20)
+    assert [node["title"] for node in atlas_nodes if node["parent_id"] is None] == ["Agents"]
+    assert [node["title"] for node in wave_nodes if node["parent_id"] is None] == []
 
 
 @pytest.mark.asyncio
@@ -459,3 +483,35 @@ async def test_configure_agent_stores_suggested_sources_in_agent_config(session_
 
     assert result["suggested_sources"] == ["Neo docs", "Agent interviews"]
     assert info["config"]["suggested_sources"] == ["Neo docs", "Agent interviews"]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_active_sparks_abandons_duplicates_and_orphans(session_factory):
+    store = SQLiteStore(session_factory)
+    agent = await store.get_or_create_agent("neo")
+    node = await store.create_node(
+        agent["id"], "finding", "Claim", "memory claim", summary="claim", confidence=0.8,
+        parent_id=None, source_id=None, spark_id=None, embedding=[1.0], domain="memory", metadata=None,
+    )
+    keep = await store.create_spark(
+        agent["id"], "open_question", "How should provenance work?", priority=0.9,
+        domain="memory", target_node_id=node["id"], source_id=None, metadata=None,
+    )
+    duplicate = await store.create_spark(
+        agent["id"], "open_question", "How should provenance work?", priority=0.8,
+        domain="memory", target_node_id=node["id"], source_id=None, metadata=None,
+    )
+    orphan = await store.create_spark(
+        agent["id"], "open_question", "What about missing nodes?", priority=0.7,
+        domain="memory", target_node_id="missing-node", source_id=None, metadata=None,
+    )
+    api = NeoAPI(store, embedding_client=StubEmbeddingClient())
+
+    result = await api.cleanup_active_sparks(agent_id=agent["id"])
+
+    assert result["duplicates_abandoned"] == 1
+    assert result["orphans_abandoned"] == 1
+    assert (await store.get_sparks(agent["id"], status="active", limit=10))[0]["id"] == keep["id"]
+    assert (await store.get_sparks(agent["id"], status="abandoned", limit=10))
+    assert duplicate["id"] in result["abandoned_duplicate_ids"]
+    assert orphan["id"] in result["abandoned_orphan_ids"]

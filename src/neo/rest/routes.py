@@ -253,7 +253,34 @@ async def list_sources(api: NeoAPI = Depends(get_api)) -> dict:
 async def trigger_discovery(api: NeoAPI = Depends(get_api)) -> dict:
     """Trigger a discovery run immediately."""
     from neo.core.discovery import DiscoveryJob
+    from neo.core.youtube import EchoSearchAsYouTube, YouTubeSearchClient
+    from neo.core.web_search import WebSearchClient
     agent = await ensure_default_agent(api)
     fresh_agent = await api.store.get_agent(agent["id"])
-    job = DiscoveryJob(api)
+    yt_search = None
+    if settings.youtube_api_key:
+        yt_search = YouTubeSearchClient(settings.youtube_api_key)
+    elif settings.search_configured():
+        yt_search = EchoSearchAsYouTube(
+            WebSearchClient(settings.search_provider, settings.search_api_key)
+        )
+    research_llm = None
+    ingestion_llm = None
+    if settings.llm_configured_for("research") or settings.llm_configured_for("ingestion"):
+        from neo.core.llm import NeoLLMClient
+    if settings.llm_configured_for("research"):
+        research_llm = NeoLLMClient(
+            api_key=settings.llm_api_key_for("research"),
+            model=settings.llm_model_for("research"),
+            base_url=settings.llm_base_url_for("research"),
+            provider=settings.llm_provider_for("research"),
+        )
+    if settings.llm_configured_for("ingestion"):
+        ingestion_llm = NeoLLMClient(
+            api_key=settings.llm_api_key_for("ingestion"),
+            model=settings.llm_model_for("ingestion"),
+            base_url=settings.llm_base_url_for("ingestion"),
+            provider=settings.llm_provider_for("ingestion"),
+        )
+    job = DiscoveryJob(api, research_llm=research_llm, ingestion_llm=ingestion_llm, yt_search=yt_search)
     return await job.run(fresh_agent, batch_size=settings.discovery_batch_size)

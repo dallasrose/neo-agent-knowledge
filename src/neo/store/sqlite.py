@@ -64,7 +64,11 @@ class SQLiteStore(StoreInterface):
             agent = await session.get(NeoAgent, agent_id)
             if agent is None:
                 return False
-            await session.delete(agent)
+            await session.execute(sql_delete(NeoEdge).where(NeoEdge.agent_id == agent_id))
+            await session.execute(sql_delete(NeoSpark).where(NeoSpark.agent_id == agent_id))
+            await session.execute(sql_delete(NeoNode).where(NeoNode.agent_id == agent_id))
+            await session.execute(sql_delete(NeoSource).where(NeoSource.agent_id == agent_id))
+            await session.execute(sql_delete(NeoAgent).where(NeoAgent.id == agent_id))
             await session.commit()
             return True
 

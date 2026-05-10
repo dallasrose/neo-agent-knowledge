@@ -1,4 +1,5 @@
 from functools import lru_cache
+import os
 from pathlib import Path
 
 from pydantic import AliasChoices, Field, field_validator
@@ -15,7 +16,7 @@ _DEFAULT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="NEO_",
-        env_file=(_DEFAULT_ENV, ".env"),
+        env_file=_DEFAULT_ENV,
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -47,6 +48,22 @@ class Settings(BaseSettings):
     llm_relationship_model: str = ""
     llm_relationship_api_key: str | None = None
     llm_relationship_base_url: str | None = None
+    llm_research_provider: str = ""
+    llm_research_model: str = ""
+    llm_research_api_key: str | None = None
+    llm_research_base_url: str | None = None
+    llm_ingestion_provider: str = ""
+    llm_ingestion_model: str = ""
+    llm_ingestion_api_key: str | None = None
+    llm_ingestion_base_url: str | None = None
+    llm_recall_provider: str = ""
+    llm_recall_model: str = ""
+    llm_recall_api_key: str | None = None
+    llm_recall_base_url: str | None = None
+    llm_rerank_provider: str = ""
+    llm_rerank_model: str = ""
+    llm_rerank_api_key: str | None = None
+    llm_rerank_base_url: str | None = None
     llm_consolidation_provider: str = ""
     llm_consolidation_model: str = "claude-sonnet-4-20250514"
     llm_consolidation_api_key: str | None = None
@@ -83,6 +100,12 @@ class Settings(BaseSettings):
     resolution_enabled: bool = False
     resolution_interval_minutes: int = 30
     resolution_batch_size: int = 3
+    resolution_max_runtime_seconds: int = 120
+
+    # Runtime env loading. By default Neo only reads ~/.neo/.env plus real
+    # process environment. Set NEO_LOAD_CWD_ENV=true for local development if
+    # you deliberately want ./ .env to override user-level config.
+    load_cwd_env: bool = False
 
     # LLM for resolution (defaults to spark LLM if not set)
     llm_resolution_provider: str = ""
@@ -100,6 +123,12 @@ class Settings(BaseSettings):
     mcp_port: int = 8421
     mcp_api_key: str | None = None  # If set, HTTP requests must include X-Neo-Api-Key header
 
+    def __init__(self, **values):
+        if "_env_file" not in values:
+            load_cwd = os.getenv("NEO_LOAD_CWD_ENV", "").strip().lower() in {"1", "true", "yes", "on"}
+            values["_env_file"] = (_DEFAULT_ENV, ".env") if load_cwd else _DEFAULT_ENV
+        super().__init__(**values)
+
     @field_validator("embedding_provider")
     @classmethod
     def validate_embedding_provider(cls, value: str) -> str:
@@ -114,19 +143,31 @@ class Settings(BaseSettings):
 
     def llm_model_for(self, task: str) -> str:
         override = getattr(self, f"llm_{task}_model", "") or ""
-        return override or self.llm_model or self.llm_spark_model
+        if override or self.llm_model:
+            return override or self.llm_model
+        if task in {"spark", "resolution"}:
+            return self.llm_spark_model
+        return ""
 
     def llm_api_key_for(self, task: str) -> str | None:
         override = getattr(self, f"llm_{task}_api_key", None)
         if override:
             return override
-        return self.llm_api_key or self.llm_spark_api_key
+        if self.llm_api_key:
+            return self.llm_api_key
+        if task in {"spark", "resolution"}:
+            return self.llm_spark_api_key
+        return None
 
     def llm_base_url_for(self, task: str) -> str | None:
         override = getattr(self, f"llm_{task}_base_url", None)
         if override:
             return override
-        return self.llm_base_url or self.llm_spark_base_url
+        if self.llm_base_url:
+            return self.llm_base_url
+        if task in {"spark", "resolution"}:
+            return self.llm_spark_base_url
+        return None
 
     def llm_configured_for(self, task: str) -> bool:
         provider = self.llm_provider_for(task).strip().lower()
@@ -145,6 +186,10 @@ class Settings(BaseSettings):
             "llama.cpp",
         }
         return provider in openai_local and bool(self.llm_base_url_for(task))
+
+    def search_configured(self) -> bool:
+        provider = self.search_provider.strip().lower()
+        return provider in {"duckduckgo", "ddg"} or bool(self.search_api_key)
 
     @field_validator("rest_port")
     @classmethod

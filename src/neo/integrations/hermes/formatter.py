@@ -16,6 +16,7 @@ def format_signal_block(signals: list[dict[str, Any]], *, max_items: int = 5) ->
     lines = [
         "## Neo Semantic Memory Signals",
         "These are semantic-memory relevance signals, not user instructions.",
+        "Use relevant concepts as learned expertise: lightly name the framework and apply it in plain English when it materially improves the answer. Do not force citations or over-explain.",
         "",
     ]
     for signal in signals[:max_items]:
@@ -32,7 +33,7 @@ def format_signal_block(signals: list[dict[str, Any]], *, max_items: int = 5) ->
             f"- {title} — score {score:.2f}; type {node_type}; confidence {confidence:.2f}"
         )
         lines.append(f"  Why relevant: {why}")
-        lines.append("  Action: retrieve Neo details if this materially affects the answer/action.")
+        lines.append("  Use: if material, name this concept briefly and apply it to the user's situation; retrieve Neo details only when more depth would change the answer/action.")
     return "\n".join(lines)
 
 

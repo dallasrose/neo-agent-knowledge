@@ -10,6 +10,9 @@ _OPENAI_COMPATIBLE = {
     "openai-compatible",
     "openai_compatible",
     "openrouter",
+    "minimax-openai",
+    "minimax_chat_completions",
+    "minimax-chat-completions",
     "ollama",
     "lmstudio",
     "lm-studio",
@@ -22,6 +25,14 @@ _ANTHROPIC_COMPATIBLE = {
     "anthropic-compatible",
     "anthropic_compatible",
     "minimax",
+    "minimax-anthropic",
+    "minimax_anthropic",
+}
+
+_GEMINI_COMPATIBLE = {
+    "gemini",
+    "google",
+    "google-gemini",
 }
 
 
@@ -31,9 +42,12 @@ def normalize_llm_provider(provider: str | None) -> str:
         return "openai"
     if value in _ANTHROPIC_COMPATIBLE:
         return "anthropic"
+    if value in _GEMINI_COMPATIBLE:
+        return "gemini"
     raise ValueError(
-        "LLM provider must be one of: anthropic, minimax, openai, "
-        "openai-compatible, openrouter, ollama, lmstudio, vllm"
+        "LLM provider must be one of: anthropic, gemini, google, minimax, "
+        "minimax-anthropic, minimax-openai, openai, openai-compatible, "
+        "openrouter, ollama, lmstudio, vllm"
     )
 
 
@@ -41,7 +55,11 @@ def _collect_text(value: Any) -> str:
     if isinstance(value, str):
         return value.strip()
     if isinstance(value, dict):
-        return _collect_text(value.get("text") or value.get("content"))
+        direct = _collect_text(value.get("text") or value.get("content"))
+        if direct:
+            return direct
+        parts = [_collect_text(item) for item in value.values()]
+        return "\n".join(part for part in parts if part).strip()
     if isinstance(value, list):
         parts: list[str] = []
         for item in value:
@@ -56,10 +74,14 @@ def _collect_text(value: Any) -> str:
         return "\n".join(part.strip() for part in parts if part and part.strip()).strip()
     text = getattr(value, "text", None)
     if text is not None:
-        return _collect_text(text)
+        collected = _collect_text(text)
+        if collected:
+            return collected
     content = getattr(value, "content", None)
     if content is not None:
-        return _collect_text(content)
+        collected = _collect_text(content)
+        if collected:
+            return collected
     model_dump = getattr(value, "model_dump", None)
     if callable(model_dump):
         try:
@@ -98,6 +120,8 @@ class NeoLLMClient:
                 resolved_base_url = base_url
             elif raw_provider == "openrouter":
                 resolved_base_url = "https://openrouter.ai/api/v1"
+            elif raw_provider in {"minimax-openai", "minimax-chat-completions", "minimax_chat_completions"}:
+                resolved_base_url = "https://api.minimax.io/v1"
             elif raw_provider == "ollama":
                 resolved_base_url = "http://127.0.0.1:11434/v1"
             elif raw_provider in {"lmstudio", "lm-studio"}:
@@ -105,6 +129,8 @@ class NeoLLMClient:
             else:
                 resolved_base_url = "https://api.openai.com/v1"
             self.base_url = resolved_base_url.rstrip("/")
+        elif self.provider == "gemini":
+            self.base_url = (base_url or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
         else:
             self.base_url = base_url
             self._anthropic_client = None
@@ -112,6 +138,8 @@ class NeoLLMClient:
     async def call(self, prompt: str, max_tokens: int = 1024) -> str:
         if self.provider == "openai":
             return await self._call_openai_compatible(prompt, max_tokens=max_tokens)
+        if self.provider == "gemini":
+            return await self._call_gemini(prompt, max_tokens=max_tokens)
         return await self._call_anthropic_compatible(prompt, max_tokens=max_tokens)
 
     async def _call_openai_compatible(self, prompt: str, *, max_tokens: int) -> str:
@@ -140,6 +168,34 @@ class NeoLLMClient:
         text = _collect_text(message.get("content"))
         if not text:
             raise ValueError("No text content in OpenAI-compatible LLM response")
+        return text
+
+    async def _call_gemini(self, prompt: str, *, max_tokens: int) -> str:
+        if not self.api_key:
+            raise ValueError("Gemini LLM provider requires an API key")
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "maxOutputTokens": max_tokens,
+                "temperature": 0,
+            },
+        }
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/models/{self.model}:generateContent",
+                params={"key": self.api_key},
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        candidates = data.get("candidates")
+        if not isinstance(candidates, list) or not candidates:
+            raise ValueError("No candidates in Gemini LLM response")
+        content = candidates[0].get("content") or {}
+        text = _collect_text(content.get("parts"))
+        if not text:
+            raise ValueError("No text content in Gemini LLM response")
         return text
 
     async def _call_anthropic_compatible(self, prompt: str, *, max_tokens: int) -> str:

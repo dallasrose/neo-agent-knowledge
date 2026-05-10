@@ -61,6 +61,67 @@ async def test_list_agents_returns_all_agents_by_name(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_delete_agent_removes_owned_graph(session_factory):
+    store = SQLiteStore(session_factory)
+    agent = await store.get_or_create_agent("delete-me")
+    source = await store.create_source(agent["id"], "document", "Spec", "/tmp/spec.md")
+    first = await store.create_node(
+        agent["id"],
+        "concept",
+        "First",
+        "one",
+        summary="one",
+        confidence=0.8,
+        parent_id=None,
+        source_id=source["id"],
+        spark_id=None,
+        embedding=[1.0],
+        domain=None,
+        metadata=None,
+    )
+    second = await store.create_node(
+        agent["id"],
+        "concept",
+        "Second",
+        "two",
+        summary="two",
+        confidence=0.8,
+        parent_id=first["id"],
+        source_id=source["id"],
+        spark_id=None,
+        embedding=[1.0],
+        domain=None,
+        metadata=None,
+    )
+    await store.create_edge(
+        agent["id"],
+        first["id"],
+        second["id"],
+        "connects",
+        weight=0.8,
+        description="linked",
+        source_id=source["id"],
+        metadata=None,
+    )
+    await store.create_spark(
+        agent["id"],
+        "open_question",
+        "Question",
+        priority=0.5,
+        domain=None,
+        target_node_id=first["id"],
+        source_id=source["id"],
+        metadata=None,
+    )
+
+    assert await store.delete_agent(agent["id"]) is True
+    assert await store.get_agent(agent["id"]) is None
+    assert await store.get_node(first["id"]) is None
+    assert await store.get_node(second["id"]) is None
+    assert await store.get_sparks(agent["id"], status="", limit=10) == []
+
+
+@pytest.mark.asyncio
 async def test_vector_search_returns_most_similar_node(session_factory):
     store = SQLiteStore(session_factory)
     agent = await store.get_or_create_agent("neo")

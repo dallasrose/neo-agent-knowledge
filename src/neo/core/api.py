@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -74,7 +75,8 @@ class NeoAPI:
                     ),
                 }
 
-        embedding = await self.embedding_client.embed_text(title, content)
+        embedding_content = self._embedding_content(content, metadata)
+        embedding = await self.embedding_client.embed_text(title, embedding_content)
         node = await self.store.create_node(
             agent_id,
             node_type,
@@ -111,6 +113,171 @@ class NeoAPI:
             "spark_generation": "triggered" if generate_sparks else "skipped",
             "edges_created": len(linked_edges),
         }
+
+    async def ingest_source_text(
+        self,
+        *,
+        agent_id: str,
+        title: str,
+        text: str,
+        source_type: str = "web",
+        reference: str = "",
+        domain: str | None = None,
+        parent_id: str | None = None,
+        query_focus: str | None = None,
+        preview: bool = False,
+        max_findings: int | None = None,
+        source_confidence: float | None = None,
+        user_endorsed: bool = False,
+    ) -> dict[str, Any]:
+        from neo.config import settings
+        from neo.core.discovery import (
+            append_source_provenance,
+            build_recall_cues,
+            extract_knowledge_findings,
+        )
+
+        agent = await self.store.get_agent(agent_id)
+        if agent is None:
+            raise ValueError(f"Agent {agent_id} not found")
+        ingestion_llm = None
+        if settings.llm_configured_for("ingestion"):
+            from neo.core.llm import NeoLLMClient
+            ingestion_llm = NeoLLMClient(
+                api_key=settings.llm_api_key_for("ingestion"),
+                model=settings.llm_model_for("ingestion"),
+                base_url=settings.llm_base_url_for("ingestion"),
+                provider=settings.llm_provider_for("ingestion"),
+            )
+        focus = query_focus or (agent.get("specialty") or "")
+        extraction_confidence = 0.82 if user_endorsed and source_confidence is None else 0.65
+        if source_confidence is not None:
+            extraction_confidence = max(0.0, min(1.0, float(source_confidence)))
+        findings = await extract_knowledge_findings(
+            source_title=title,
+            source_text=text,
+            source_type=source_type,
+            source_url=reference,
+            agent_focus=focus,
+            llm=ingestion_llm,
+            max_findings=max_findings,
+            confidence=extraction_confidence,
+        )
+        if preview:
+            return {"source_title": title, "findings": findings, "preview": True}
+        if not findings:
+            return {"source_title": title, "nodes_created": 0, "nodes": [], "message": "No durable findings extracted."}
+
+        source_metadata = {
+            "query_focus": query_focus,
+            "source_confidence": extraction_confidence,
+            "user_endorsed": bool(user_endorsed),
+        }
+        source = await self.store.create_source(
+            agent_id,
+            source_type,
+            title,
+            reference or title,
+            content=text,
+            metadata={key: value for key, value in source_metadata.items() if value not in (None, "")},
+        )
+        provenance_parts = [f"Source: {reference}"] if reference else [f"Source: {title}"]
+        if query_focus:
+            provenance_parts.append(f"Query focus: {query_focus}")
+
+        nodes: list[dict[str, Any]] = []
+        for index, finding in enumerate(findings, start=1):
+            if source_confidence is not None:
+                finding["confidence"] = extraction_confidence
+            recall_cues = finding.get("recall_cues") or build_recall_cues(
+                finding["title"], finding.get("summary", ""), finding.get("content", "")
+            )
+            result = await self.store_node(
+                agent_id=agent_id,
+                node_type="finding",
+                title=finding["title"],
+                content=append_source_provenance(finding["content"], provenance_parts),
+                summary=finding["summary"],
+                confidence=finding["confidence"],
+                parent_id=parent_id,
+                source_id=source["id"],
+                domain=domain,
+                metadata={
+                    "source_type": source_type,
+                    "source_title": title,
+                    "reference": reference,
+                    "query_focus": query_focus,
+                    "finding_index": index,
+                    "findings_total": len(findings),
+                    "chunk_index": finding.get("chunk_index"),
+                    "chunks_total": finding.get("chunks_total"),
+                    "extraction_guard_hit": finding.get("extraction_guard_hit"),
+                    "extraction_passes_completed": finding.get("extraction_passes_completed"),
+                    "llm_fallback_used": finding.get("llm_fallback_used", False),
+                    "llm_fallback_reason": finding.get("llm_fallback_reason"),
+                    "source_confidence": extraction_confidence,
+                    "user_endorsed": bool(user_endorsed),
+                    "recall_cues": recall_cues,
+                },
+                generate_sparks=True,
+                deduplicate=True,
+            )
+            nodes.append(result)
+
+        return {
+            "source_id": source["id"],
+            "source_title": title,
+            "nodes_created": len([node for node in nodes if not node.get("duplicate")]),
+            "nodes": nodes,
+        }
+
+    async def ingest_source_url(
+        self,
+        *,
+        agent_id: str,
+        url: str,
+        title: str | None = None,
+        domain: str | None = None,
+        parent_id: str | None = None,
+        query_focus: str | None = None,
+        preview: bool = False,
+        max_findings: int | None = None,
+        source_confidence: float | None = None,
+        user_endorsed: bool = False,
+    ) -> dict[str, Any]:
+        source_type = "web"
+        try:
+            from neo.core.youtube import get_fetcher, is_youtube_url, extract_video_id
+        except ImportError:
+            is_youtube_url = None  # type: ignore[assignment]
+            get_fetcher = None  # type: ignore[assignment]
+            extract_video_id = None  # type: ignore[assignment]
+
+        if is_youtube_url and is_youtube_url(url):
+            if get_fetcher is None:
+                raise RuntimeError("youtube-transcript-api not installed; cannot ingest YouTube transcript")
+            data = get_fetcher().fetch_url(url)
+            video_id = extract_video_id(url) if extract_video_id else ""
+            source_title = title or f"YouTube: {video_id or url}"
+            text = data["text"]
+            source_type = "youtube"
+        else:
+            source_title, text = await self._fetch_url_text(url, title=title)
+
+        return await self.ingest_source_text(
+            agent_id=agent_id,
+            title=source_title,
+            text=text,
+            source_type=source_type,
+            reference=url,
+            domain=domain,
+            parent_id=parent_id,
+            query_focus=query_focus,
+            preview=preview,
+            max_findings=max_findings,
+            source_confidence=source_confidence,
+            user_endorsed=user_endorsed,
+        )
 
     async def get_node(
         self,
@@ -300,6 +467,75 @@ class NeoAPI:
         if root is None or root.get("agent_id") != agent_id:
             return None
         return root_id
+
+    @staticmethod
+    def _embedding_content(content: str, metadata: dict[str, Any] | None) -> str:
+        cues = (metadata or {}).get("recall_cues")
+        if isinstance(cues, list):
+            cue_text = " ".join(str(cue) for cue in cues if str(cue).strip())
+            if cue_text:
+                return f"{content}\n\nRecall cues: {cue_text}"
+        return content
+
+    @staticmethod
+    async def _fetch_url_text(url: str, *, title: str | None = None) -> tuple[str, str]:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            response = await client.get(url, headers={"User-Agent": "NeoResearchBot/1.0"})
+            response.raise_for_status()
+            raw = response.text
+            content_type = response.headers.get("content-type", "")
+
+        inferred_title = title or url
+        title_match = re.search(r"<title[^>]*>(.*?)</title>", raw, flags=re.IGNORECASE | re.DOTALL)
+        if not title and title_match:
+            inferred_title = re.sub(r"\s+", " ", title_match.group(1)).strip()
+        if "html" in content_type.lower() or "<html" in raw[:500].lower():
+            raw = re.sub(r"(?is)<(script|style|noscript).*?</\1>", " ", raw)
+            raw = re.sub(r"(?s)<[^>]+>", " ", raw)
+        text = re.sub(r"\s+", " ", raw).strip()
+        if not text:
+            raise ValueError(f"No readable text found at {url}")
+        return inferred_title, text
+
+    async def cleanup_active_sparks(self, *, agent_id: str, limit: int = 1000) -> dict[str, Any]:
+        """Abandon duplicate active sparks and sparks pointing at missing nodes."""
+        sparks = await self.store.get_sparks(agent_id, status="active", limit=limit)
+        seen: set[tuple[str, str, str]] = set()
+        abandoned_duplicates: list[str] = []
+        abandoned_orphans: list[str] = []
+        for spark in sparks:
+            target_node_id = spark.get("target_node_id")
+            if target_node_id and await self.store.get_node(target_node_id) is None:
+                await self.store.abandon_spark(
+                    spark["id"],
+                    reason="orphaned target node",
+                    metadata={"cleanup": "orphaned_target_node"},
+                )
+                abandoned_orphans.append(spark["id"])
+                continue
+            key = (
+                str(spark.get("spark_type") or ""),
+                re.sub(r"[^a-z0-9]+", " ", str(spark.get("description") or "").lower()).strip(),
+                str(target_node_id or ""),
+            )
+            if key in seen:
+                await self.store.abandon_spark(
+                    spark["id"],
+                    reason="duplicate active spark",
+                    metadata={"cleanup": "duplicate_active_spark"},
+                )
+                abandoned_duplicates.append(spark["id"])
+                continue
+            seen.add(key)
+        return {
+            "active_scanned": len(sparks),
+            "duplicates_abandoned": len(abandoned_duplicates),
+            "orphans_abandoned": len(abandoned_orphans),
+            "abandoned_duplicate_ids": abandoned_duplicates,
+            "abandoned_orphan_ids": abandoned_orphans,
+        }
 
     async def _link_related_nodes(
         self,
@@ -596,23 +832,31 @@ class NeoAPI:
             yt_search = None
             if settings.youtube_api_key:
                 yt_search = YouTubeSearchClient(settings.youtube_api_key)
-            elif settings.search_api_key:
+            elif settings.search_configured():
                 yt_search = EchoSearchAsYouTube(
                     WebSearchClient(settings.search_provider, settings.search_api_key)
                 )
 
-            res_key = settings.llm_api_key_for("resolution")
-            llm = None
-            if settings.llm_configured_for("resolution"):
-                from neo.core.resolver import ResolutionLLM
-                llm = ResolutionLLM(
-                    api_key=res_key,
-                    model=settings.llm_model_for("resolution"),
-                    base_url=settings.llm_base_url_for("resolution"),
-                    provider=settings.llm_provider_for("resolution"),
+            research_llm = None
+            if settings.llm_configured_for("research"):
+                from neo.core.llm import NeoLLMClient
+                research_llm = NeoLLMClient(
+                    api_key=settings.llm_api_key_for("research"),
+                    model=settings.llm_model_for("research"),
+                    base_url=settings.llm_base_url_for("research"),
+                    provider=settings.llm_provider_for("research"),
+                )
+            ingestion_llm = None
+            if settings.llm_configured_for("ingestion"):
+                from neo.core.llm import NeoLLMClient
+                ingestion_llm = NeoLLMClient(
+                    api_key=settings.llm_api_key_for("ingestion"),
+                    model=settings.llm_model_for("ingestion"),
+                    base_url=settings.llm_base_url_for("ingestion"),
+                    provider=settings.llm_provider_for("ingestion"),
                 )
 
-            job = DiscoveryJob(self, llm=llm, yt_search=yt_search)
+            job = DiscoveryJob(self, research_llm=research_llm, ingestion_llm=ingestion_llm, yt_search=yt_search)
             # Re-fetch agent to get latest config
             fresh = await self.store.get_agent(agent["id"])
             if fresh:

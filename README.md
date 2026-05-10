@@ -19,8 +19,8 @@ is backed up.
 
 ## Install
 
-Neo requires Python 3.12 or newer. The easiest install path is `uv`, because
-it can provide Python 3.12 even when `python3.12` is not on your PATH.
+Neo requires Python 3.11 or newer. The easiest install path is `uv`, because
+it can provide a compatible Python even when your system Python is older.
 
 Install from GitHub:
 
@@ -40,10 +40,10 @@ uv tool install 'neo-agent-knowledge[postgres] @ git+https://github.com/dallasro
 
 The installed command is `neo`.
 
-If you already manage Python 3.12 yourself, pip works too:
+If you already manage Python 3.11+ yourself, pip works too:
 
 ```bash
-python3.12 -m pip install 'neo-agent-knowledge @ git+https://github.com/dallasrose/neo-agent-knowledge.git'
+python3 -m pip install 'neo-agent-knowledge @ git+https://github.com/dallasrose/neo-agent-knowledge.git'
 ```
 
 ## Start

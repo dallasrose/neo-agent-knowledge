@@ -54,7 +54,7 @@ async def _lifespan(server: FastMCP):
 
         web_search = (
             WebSearchClient(settings.search_provider, settings.search_api_key)
-            if settings.search_api_key
+            if settings.search_configured()
             else NullWebSearch()
         )
         res_model = settings.llm_model_for("resolution")
@@ -68,6 +68,7 @@ async def _lifespan(server: FastMCP):
                 api, resolver, agent_id,
                 interval_minutes=settings.resolution_interval_minutes,
                 batch_size=settings.resolution_batch_size,
+                max_runtime_seconds=settings.resolution_max_runtime_seconds,
             )
             tasks.append(res_sched.start())
             logger.info("Neo: resolution scheduler started (every %dm)", settings.resolution_interval_minutes)
@@ -87,7 +88,7 @@ async def _lifespan(server: FastMCP):
         if settings.youtube_api_key:
             yt_search = YouTubeSearchClient(settings.youtube_api_key)
             logger.info("Neo: YouTube search via Data API")
-        elif settings.search_api_key:
+        elif settings.search_configured():
             ws = WebSearchClient(settings.search_provider, settings.search_api_key)
             yt_search = EchoSearchAsYouTube(ws)
             logger.info("Neo: YouTube search via %s (web fallback)", settings.search_provider)
@@ -95,17 +96,26 @@ async def _lifespan(server: FastMCP):
             logger.info("Neo: no YouTube search client — autonomous mode disabled. "
                         "Set NEO_YOUTUBE_API_KEY or NEO_SEARCH_API_KEY to enable.")
 
-        # Reuse the resolution LLM for query generation if available
-        res_model = settings.llm_model_for("resolution")
-        res_key = settings.llm_api_key_for("resolution")
-        res_url = settings.llm_base_url_for("resolution")
-        res_provider = settings.llm_provider_for("resolution")
-        discovery_llm = None
-        if settings.llm_configured_for("resolution"):
-            from neo.core.resolver import ResolutionLLM
-            discovery_llm = ResolutionLLM(api_key=res_key, model=res_model, base_url=res_url, provider=res_provider)
+        research_llm = None
+        ingestion_llm = None
+        if settings.llm_configured_for("research") or settings.llm_configured_for("ingestion"):
+            from neo.core.llm import NeoLLMClient
+        if settings.llm_configured_for("research"):
+            research_llm = NeoLLMClient(
+                api_key=settings.llm_api_key_for("research"),
+                model=settings.llm_model_for("research"),
+                base_url=settings.llm_base_url_for("research"),
+                provider=settings.llm_provider_for("research"),
+            )
+        if settings.llm_configured_for("ingestion"):
+            ingestion_llm = NeoLLMClient(
+                api_key=settings.llm_api_key_for("ingestion"),
+                model=settings.llm_model_for("ingestion"),
+                base_url=settings.llm_base_url_for("ingestion"),
+                provider=settings.llm_provider_for("ingestion"),
+            )
 
-        discovery_job = DiscoveryJob(api, llm=discovery_llm, yt_search=yt_search)
+        discovery_job = DiscoveryJob(api, research_llm=research_llm, ingestion_llm=ingestion_llm, yt_search=yt_search)
         discovery_sched = DiscoveryScheduler(
             api, discovery_job, agent_id,
             interval_minutes=settings.discovery_interval_minutes,
@@ -305,7 +315,7 @@ async def _build_resolver(api):
     )
     web_search = (
         WebSearchClient(settings.search_provider, settings.search_api_key)
-        if settings.search_api_key
+        if settings.search_configured()
         else NullWebSearch()
     )
     return SparkResolver(api, llm, web_search)
@@ -778,26 +788,67 @@ async def trigger_discovery() -> str:
     yt_search = None
     if settings.youtube_api_key:
         yt_search = YouTubeSearchClient(settings.youtube_api_key)
-    elif settings.search_api_key:
+    elif settings.search_configured():
         yt_search = EchoSearchAsYouTube(
             WebSearchClient(settings.search_provider, settings.search_api_key)
         )
 
-    res_key = settings.llm_api_key_for("resolution")
-    res_model = settings.llm_model_for("resolution")
-    res_url = settings.llm_base_url_for("resolution")
-    res_provider = settings.llm_provider_for("resolution")
-    discovery_llm = None
-    if settings.llm_configured_for("resolution"):
-        from neo.core.resolver import ResolutionLLM
-        discovery_llm = ResolutionLLM(api_key=res_key, model=res_model, base_url=res_url, provider=res_provider)
+    research_llm = None
+    ingestion_llm = None
+    if settings.llm_configured_for("research") or settings.llm_configured_for("ingestion"):
+        from neo.core.llm import NeoLLMClient
+    if settings.llm_configured_for("research"):
+        research_llm = NeoLLMClient(
+            api_key=settings.llm_api_key_for("research"),
+            model=settings.llm_model_for("research"),
+            base_url=settings.llm_base_url_for("research"),
+            provider=settings.llm_provider_for("research"),
+        )
+    if settings.llm_configured_for("ingestion"):
+        ingestion_llm = NeoLLMClient(
+            api_key=settings.llm_api_key_for("ingestion"),
+            model=settings.llm_model_for("ingestion"),
+            base_url=settings.llm_base_url_for("ingestion"),
+            provider=settings.llm_provider_for("ingestion"),
+        )
 
-    job = DiscoveryJob(api, llm=discovery_llm, yt_search=yt_search)
+    job = DiscoveryJob(api, research_llm=research_llm, ingestion_llm=ingestion_llm, yt_search=yt_search)
     fresh_agent = await api.store.get_agent(agent["id"])
     result = await job.run(
         fresh_agent,
         batch_size=settings.discovery_batch_size,
         lookback_days=settings.discovery_lookback_days,
+    )
+    return json.dumps(result, default=str)
+
+
+@mcp.tool()
+async def ingest_source_url(
+    url: str,
+    title: str | None = None,
+    domain: str | None = None,
+    parent_id: str | None = None,
+    query_focus: str | None = None,
+    preview: bool = False,
+    max_findings: int | None = None,
+) -> str:
+    """Read a web URL and store durable research findings in memory.
+
+    Use when the user gives a link and asks you to research, remember, or add
+    the useful knowledge to your research memory. Set preview=true when you
+    want to inspect candidate findings before writing.
+    """
+    api = await get_api()
+    agent = await ensure_default_agent(api)
+    result = await api.ingest_source_url(
+        agent_id=agent["id"],
+        url=url,
+        title=title,
+        domain=domain,
+        parent_id=parent_id,
+        query_focus=query_focus,
+        preview=preview,
+        max_findings=max_findings,
     )
     return json.dumps(result, default=str)
 
@@ -852,14 +903,8 @@ async def ingest_youtube(
     try:
         fetcher = get_fetcher()
         loop = _asyncio.get_event_loop()
-        if query_focus:
-            data = await loop.run_in_executor(
-                None, lambda: fetcher.fetch_relevant_excerpt(url, query_focus, max_chars=3000)
-            )
-            excerpt = data["excerpt"]
-        else:
-            data = await loop.run_in_executor(None, lambda: fetcher.fetch_url(url))
-            excerpt = data["text"]
+        data = await loop.run_in_executor(None, lambda: fetcher.fetch_url(url))
+        excerpt = data["text"]
 
     except Exception as exc:
         return json.dumps({"error": f"Transcript fetch failed: {exc}"})
@@ -877,14 +922,15 @@ async def ingest_youtube(
         provenance_parts.append(f"Query focus: {query_focus}")
     from neo.core.discovery import append_source_provenance, extract_knowledge_findings
 
-    res_key = settings.llm_api_key_for("resolution")
-    res_model = settings.llm_model_for("resolution")
-    res_url = settings.llm_base_url_for("resolution")
-    res_provider = settings.llm_provider_for("resolution")
-    discovery_llm = None
-    if settings.llm_configured_for("resolution"):
-        from neo.core.resolver import ResolutionLLM
-        discovery_llm = ResolutionLLM(api_key=res_key, model=res_model, base_url=res_url, provider=res_provider)
+    ingestion_llm = None
+    if settings.llm_configured_for("ingestion"):
+        from neo.core.llm import NeoLLMClient
+        ingestion_llm = NeoLLMClient(
+            api_key=settings.llm_api_key_for("ingestion"),
+            model=settings.llm_model_for("ingestion"),
+            base_url=settings.llm_base_url_for("ingestion"),
+            provider=settings.llm_provider_for("ingestion"),
+        )
 
     findings = await extract_knowledge_findings(
         source_title=inferred_title,
@@ -892,8 +938,8 @@ async def ingest_youtube(
         source_type="youtube",
         source_url=url,
         agent_focus=query_focus or (agent.get("specialty") or ""),
-        llm=discovery_llm,
-        max_findings=5,
+        llm=ingestion_llm,
+        max_findings=None,
         confidence=0.7,
     )
     if not findings:
@@ -908,6 +954,10 @@ async def ingest_youtube(
             "url": url,
             "finding_index": index,
             "findings_total": len(findings),
+            "chunk_index": finding.get("chunk_index"),
+            "chunks_total": finding.get("chunks_total"),
+            "extraction_guard_hit": finding.get("extraction_guard_hit"),
+            "extraction_passes_completed": finding.get("extraction_passes_completed"),
         }
         if speaker:
             metadata["speaker"] = speaker

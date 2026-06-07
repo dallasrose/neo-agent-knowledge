@@ -1,0 +1,5 @@
+name: neo
+type: memory
+version: 0.1.0
+description: Neo semantic memory provider for Hermes Agent
+author: Dallas Rose

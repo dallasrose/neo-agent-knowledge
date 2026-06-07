@@ -8,6 +8,28 @@ from neo.cli.main import cli
 from neo.config import Settings
 
 
+def test_default_settings_do_not_load_cwd_env_without_explicit_opt_in(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("NEO_LOAD_CWD_ENV", raising=False)
+    monkeypatch.delenv("NEO_LLM_MODEL", raising=False)
+    (tmp_path / ".env").write_text("NEO_LLM_MODEL=shadow-model\n")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.llm_model != "shadow-model"
+
+
+def test_default_settings_can_load_cwd_env_with_explicit_opt_in(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("NEO_LOAD_CWD_ENV", "true")
+    monkeypatch.delenv("NEO_LLM_MODEL", raising=False)
+    (tmp_path / ".env").write_text("NEO_LLM_MODEL=dev-shadow-model\n")
+
+    settings = Settings()
+
+    assert settings.llm_model == "dev-shadow-model"
+
+
 def test_user_config_loads_before_local_env(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("NEO_LLM_MODEL", raising=False)
     monkeypatch.delenv("NEO_AGENT_NAME", raising=False)
@@ -78,6 +100,31 @@ def test_setup_disables_resolution_without_llm(tmp_path, monkeypatch) -> None:
     content = config_path.read_text()
     assert "NEO_LLM_PROVIDER" not in content
     assert "NEO_RESOLUTION_ENABLED=false" in content
+
+
+def test_setup_accepts_gemini_provider(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / ".neo.env"
+    monkeypatch.setattr("neo.cli.main.get_config_env_path", lambda: config_path)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "setup",
+            "--provider",
+            "gemini",
+            "--api-key",
+            "google-key",
+            "--non-interactive",
+        ],
+    )
+
+    assert result.exit_code == 0
+    content = config_path.read_text()
+    assert "NEO_LLM_PROVIDER=gemini" in content
+    assert "NEO_LLM_MODEL=gemini-2.5-flash" in content
+    assert "NEO_LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta" in content
+    assert "NEO_LLM_API_KEY=google-key" in content
+    assert "NEO_RESOLUTION_ENABLED=true" in content
 
 
 def test_default_cli_launches_visualizer(monkeypatch) -> None:

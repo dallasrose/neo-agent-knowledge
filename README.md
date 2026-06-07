@@ -19,8 +19,8 @@ is backed up.
 
 ## Install
 
-Neo requires Python 3.12 or newer. The easiest install path is `uv`, because
-it can provide Python 3.12 even when `python3.12` is not on your PATH.
+Neo requires Python 3.11 or newer. The easiest install path is `uv`, because
+it can provide a compatible Python even when your system Python is older.
 
 Install from GitHub:
 
@@ -40,10 +40,10 @@ uv tool install 'neo-agent-knowledge[postgres] @ git+https://github.com/dallasro
 
 The installed command is `neo`.
 
-If you already manage Python 3.12 yourself, pip works too:
+If you already manage Python 3.11+ yourself, pip works too:
 
 ```bash
-python3.12 -m pip install 'neo-agent-knowledge @ git+https://github.com/dallasrose/neo-agent-knowledge.git'
+python3 -m pip install 'neo-agent-knowledge @ git+https://github.com/dallasrose/neo-agent-knowledge.git'
 ```
 
 ## Start
@@ -118,6 +118,19 @@ neo mcp-config
 
 Neo starts when the agent launches the MCP server. No separate daemon is
 required for stdio mode.
+
+### Hermes memory provider
+
+Neo can also install a Hermes memory-provider shim for automatic semantic recall:
+
+```bash
+neo hermes install --agent-name atlas
+```
+
+This installs `$HERMES_HOME/plugins/neo/` and writes `$HERMES_HOME/neo.json`.
+Neo is semantic memory, not episodic chat memory; if you use Honcho or another
+episodic provider, keep it and run Neo alongside it using Hermes multi-provider
+support. See [`docs/hermes-memory-provider.md`](docs/hermes-memory-provider.md).
 
 Shared Neo settings such as the database, LLM, search keys, and discovery
 configuration live in Neo's own config file, not in the agent platform.

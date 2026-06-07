@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import and_, delete as sql_delete, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from neo.default_agents import merge_agent_defaults
 from neo.models import NeoAgent, NeoEdge, NeoNode, NeoSource, NeoSpark
 from neo.store.interface import StoreInterface
 
@@ -22,6 +23,7 @@ class SQLiteStore(StoreInterface):
         self.session_factory = session_factory
 
     async def get_or_create_agent(self, name: str, **kwargs: Any) -> dict[str, Any]:
+        kwargs = merge_agent_defaults(name, kwargs)
         async with self.session_factory() as session:
             result = await session.execute(select(NeoAgent).where(NeoAgent.name == name))
             agent = result.scalar_one_or_none()
@@ -30,6 +32,26 @@ class SQLiteStore(StoreInterface):
                 session.add(agent)
                 await session.commit()
                 await session.refresh(agent)
+            else:
+                updates = merge_agent_defaults(name, self._agent_to_dict(agent))
+                changed = False
+                for key in ("specialty", "domains", "skill_notes", "config"):
+                    value = updates.get(key)
+                    if value and getattr(agent, key) in (None, "", [], {}):
+                        setattr(agent, key, value)
+                        changed = True
+                if isinstance(updates.get("config"), dict):
+                    current_config = dict(agent.config or {})
+                    default_config = updates["config"]
+                    for cfg_key in ("research_guidance", "suggested_sources", "source_default_agent_profile"):
+                        if cfg_key not in current_config and cfg_key in default_config:
+                            current_config[cfg_key] = default_config[cfg_key]
+                            changed = True
+                    if changed:
+                        agent.config = current_config
+                if changed:
+                    await session.commit()
+                    await session.refresh(agent)
             return self._agent_to_dict(agent)
 
     async def get_agent(self, agent_id: str) -> dict[str, Any] | None:
@@ -64,7 +86,11 @@ class SQLiteStore(StoreInterface):
             agent = await session.get(NeoAgent, agent_id)
             if agent is None:
                 return False
-            await session.delete(agent)
+            await session.execute(sql_delete(NeoEdge).where(NeoEdge.agent_id == agent_id))
+            await session.execute(sql_delete(NeoSpark).where(NeoSpark.agent_id == agent_id))
+            await session.execute(sql_delete(NeoNode).where(NeoNode.agent_id == agent_id))
+            await session.execute(sql_delete(NeoSource).where(NeoSource.agent_id == agent_id))
+            await session.execute(sql_delete(NeoAgent).where(NeoAgent.id == agent_id))
             await session.commit()
             return True
 

@@ -55,7 +55,7 @@ async def lifespan(app: FastAPI):
         if settings.llm_configured_for("resolution"):
             web_search = (
                 WebSearchClient(settings.search_provider, settings.search_api_key)
-                if settings.search_api_key
+                if settings.search_configured()
                 else NullWebSearch()
             )
             resolution_llm = ResolutionLLM(
@@ -70,6 +70,7 @@ async def lifespan(app: FastAPI):
                 agent_id=agent["id"],
                 interval_minutes=settings.resolution_interval_minutes,
                 batch_size=settings.resolution_batch_size,
+                max_runtime_seconds=settings.resolution_max_runtime_seconds,
             )
             resolution_sched.start()
     app.state.neo_resolution = resolution_sched
@@ -82,28 +83,33 @@ async def lifespan(app: FastAPI):
         yt_search = None
         if settings.youtube_api_key:
             yt_search = YouTubeSearchClient(settings.youtube_api_key)
-        elif settings.search_api_key:
+        elif settings.search_configured():
             yt_search = EchoSearchAsYouTube(
                 WebSearchClient(settings.search_provider, settings.search_api_key)
             )
 
-        res_key = settings.llm_api_key_for("resolution")
-        res_model = settings.llm_model_for("resolution")
-        res_url = settings.llm_base_url_for("resolution")
-        res_provider = settings.llm_provider_for("resolution")
-        discovery_llm = None
-        if settings.llm_configured_for("resolution"):
-            from neo.core.resolver import ResolutionLLM
-            discovery_llm = ResolutionLLM(
-                api_key=res_key,
-                model=res_model,
-                base_url=res_url,
-                provider=res_provider,
+        research_llm = None
+        if settings.llm_configured_for("research"):
+            from neo.core.llm import NeoLLMClient
+            research_llm = NeoLLMClient(
+                api_key=settings.llm_api_key_for("research"),
+                model=settings.llm_model_for("research"),
+                base_url=settings.llm_base_url_for("research"),
+                provider=settings.llm_provider_for("research"),
+            )
+        ingestion_llm = None
+        if settings.llm_configured_for("ingestion"):
+            from neo.core.llm import NeoLLMClient
+            ingestion_llm = NeoLLMClient(
+                api_key=settings.llm_api_key_for("ingestion"),
+                model=settings.llm_model_for("ingestion"),
+                base_url=settings.llm_base_url_for("ingestion"),
+                provider=settings.llm_provider_for("ingestion"),
             )
 
         discovery_sched = DiscoveryScheduler(
             api,
-            DiscoveryJob(api, llm=discovery_llm, yt_search=yt_search),
+            DiscoveryJob(api, research_llm=research_llm, ingestion_llm=ingestion_llm, yt_search=yt_search),
             agent_id=agent["id"],
             interval_minutes=settings.discovery_interval_minutes,
             batch_size=settings.discovery_batch_size,

@@ -40,7 +40,7 @@ def cli(ctx: click.Context) -> None:
 @cli.command()
 @click.option(
     "--provider",
-    type=click.Choice(["none", "ollama", "openai", "openrouter", "anthropic", "minimax"]),
+    type=click.Choice(["none", "ollama", "openai", "openrouter", "anthropic", "minimax", "gemini"]),
     default=None,
     help="LLM provider to write into Neo's user config.",
 )
@@ -81,7 +81,7 @@ def setup(
         chosen_provider = click.prompt(
             "LLM provider",
             default=values.get("NEO_LLM_PROVIDER", "ollama"),
-            type=click.Choice(["none", "ollama", "openai", "openrouter", "anthropic", "minimax"]),
+            type=click.Choice(["none", "ollama", "openai", "openrouter", "anthropic", "minimax", "gemini"]),
         )
     chosen_provider = chosen_provider or values.get("NEO_LLM_PROVIDER") or "ollama"
 
@@ -96,6 +96,7 @@ def setup(
             "openrouter": "anthropic/claude-sonnet-4",
             "anthropic": "claude-haiku-4-5",
             "minimax": "MiniMax-M2.7",
+            "gemini": "gemini-2.5-flash",
         }[chosen_provider]
         chosen_model = model
         if chosen_model is None and not non_interactive:
@@ -109,6 +110,7 @@ def setup(
                 "openai": "https://api.openai.com/v1",
                 "openrouter": "https://openrouter.ai/api/v1",
                 "minimax": "https://api.minimax.io/anthropic",
+                "gemini": "https://generativelanguage.googleapis.com/v1beta",
             }
             resolved_base_url = values.get("NEO_LLM_BASE_URL") or defaults.get(chosen_provider)
             if not non_interactive and resolved_base_url:
@@ -166,6 +168,33 @@ def setup(
     click.echo("No agent node was created. Agent roots are created when an agent connects.")
     click.echo("MCP config example:")
     click.echo('{"mcpServers":{"neo":{"command":"neo","args":["serve","--agent-name","YOUR_AGENT_NAME"]}}}')
+
+
+@cli.group()
+def hermes() -> None:
+    """Hermes Agent integration commands."""
+
+
+@hermes.command("install")
+@click.option("--hermes-home", default=None, help="Hermes home directory. Defaults to $HERMES_HOME or ~/.hermes.")
+@click.option("--agent-name", default="default", show_default=True, help="Neo agent identity to use from Hermes.")
+@click.option("--set-active", is_flag=True, help="Write an activation hint for single-provider Hermes installs.")
+@click.option("--force", is_flag=True, help="Overwrite existing Neo Hermes plugin files and config.")
+def hermes_install(hermes_home: str | None, agent_name: str, set_active: bool, force: bool) -> None:
+    """Install Neo's Hermes memory-provider plugin shim."""
+    import os
+    from pathlib import Path
+
+    from neo.integrations.hermes.installer import install_hermes_plugin
+
+    home = Path(hermes_home or os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+    result = install_hermes_plugin(home, agent_name=agent_name, set_active=set_active, force=force)
+    click.echo(f"Installed Neo Hermes plugin: {result['plugin_dir']}")
+    click.echo(f"Neo Hermes config: {result['config_path']}")
+    if set_active:
+        click.echo("Activation hint written. If you use Honcho, prefer Hermes multi-provider support instead of replacing it.")
+    else:
+        click.echo("Neo was installed but not activated, preserving any existing memory provider such as Honcho.")
 
 
 @cli.command("mcp-config")

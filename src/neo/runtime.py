@@ -86,21 +86,40 @@ async def _migrate_agent_name_if_needed(store: StoreInterface, new_agent: dict, 
     return await store.update_agent(default_agent["id"], name=target_name)
 
 
+async def _find_agents_root(store: StoreInterface, current_agent_id: str) -> dict | None:
+    """Find the shared top-level Agents root, preferring the current agent."""
+    agents = await store.list_agents()
+    ordered_agent_ids = [current_agent_id]
+    ordered_agent_ids.extend(agent["id"] for agent in agents if agent["id"] != current_agent_id)
+
+    for agent_id in ordered_agent_ids:
+        nodes = await store.get_nodes_by_agent(agent_id, limit=2000)
+        agents_root = next(
+            (
+                node
+                for node in nodes
+                if node["title"].lower() == "agents"
+                and node["node_type"] == "concept"
+                and node.get("parent_id") is None
+                and (node.get("metadata") or {}).get("role") == "agents_root"
+            ),
+            None,
+        )
+        if agents_root:
+            return agents_root
+    return None
+
+
 async def ensure_agent_root_hierarchy(store: StoreInterface, agent: dict) -> str | None:
-    """Ensure the canonical Agents → {AgentName} root hierarchy exists, plus a
-    'Neo Instructions' sibling node for system/policy content.
+    """Ensure the canonical Agents → {AgentName} root hierarchy exists.
 
     On first run (or if nodes were deleted) this will:
-      1. Find-or-create 'Agents' root concept node.
+      1. Find-or-create the shared 'Agents' root concept node.
       2. Find-or-create '{AgentName}' concept node as child of Agents.
          Renames any existing node whose title is the old default 'Default'.
-      3. Find-or-create 'Neo Instructions' concept node as a sibling of the
-         agent root (also a direct child of 'Agents').
-         If a 'Neo Usage Policy' node exists anywhere in the graph, it is
-         re-parented here and renamed to 'Neo Instructions'.
-      4. Migrate every existing orphan node (parent_id IS NULL, not a system root)
+      3. Migrate every existing orphan node (parent_id IS NULL, not a system root)
          under the agent root.
-      5. Persist root IDs in agent.config.
+      4. Persist root IDs in agent.config.
 
     Returns the agent root node ID (e.g. the 'Atlas' node).
     """
@@ -112,19 +131,22 @@ async def ensure_agent_root_hierarchy(store: StoreInterface, agent: dict) -> str
     # ── Fast path ────────────────────────────────────────────────────────────
     cached_root = config.get("root_node_id")
     cached_agents = config.get("agents_root_node_id")
-    cached_neo_instructions = config.get("neo_instructions_node_id")
-    if cached_root and cached_agents and cached_neo_instructions:
+    if cached_root and cached_agents:
         root_ok = await store.get_node(cached_root)
         agents_ok = await store.get_node(cached_agents)
-        neo_ok = await store.get_node(cached_neo_instructions)
-        if root_ok and agents_ok and neo_ok:
+        if root_ok and agents_ok:
             # Even on fast path: rename the agent root node if its title doesn't match
+            updates: dict = {}
             if root_ok["title"].lower() != agent_title.lower():
                 logger.info(
                     "Neo: renaming agent root concept '%s' → '%s'",
                     root_ok["title"], agent_title,
                 )
-                await store.update_node(cached_root, title=agent_title)
+                updates["title"] = agent_title
+            if root_ok.get("parent_id") != agents_ok["id"]:
+                updates["parent_id"] = agents_ok["id"]
+            if updates:
+                await store.update_node(cached_root, **updates)
             return cached_root
 
     logger.info("Neo: bootstrapping root node hierarchy for agent '%s'", agent_name)
@@ -134,12 +156,8 @@ async def ensure_agent_root_hierarchy(store: StoreInterface, agent: dict) -> str
     def _is_system(n: dict) -> bool:
         return bool((n.get("metadata") or {}).get("system"))
 
-    # ── Step 1: find or create 'Agents' root ─────────────────────────────────
-    agents_node = next(
-        (n for n in all_nodes if n["title"].lower() == "agents"
-         and n["node_type"] == "concept" and _is_system(n)),
-        None,
-    ) or next(
+    # ── Step 1: find or create the shared 'Agents' root ──────────────────────
+    agents_node = await _find_agents_root(store, agent_id) or next(
         (n for n in all_nodes if n["title"].lower() == "agents"
          and n["node_type"] == "concept" and n.get("parent_id") is None),
         None,
@@ -214,55 +232,7 @@ async def ensure_agent_root_hierarchy(store: StoreInterface, agent: dict) -> str
 
     system_ids.add(agent_root["id"])
 
-    # ── Step 3: find or create 'Neo Instructions' top-level node ─────────────
-    # Neo Instructions lives at root level (parent=None), as a sibling of Agents.
-    # Look for an existing "Neo Instructions" or legacy "Neo Usage Policy" node.
-    neo_instructions_node_id = config.get("neo_instructions_node_id")
-    neo_instructions_node = None
-
-    if neo_instructions_node_id:
-        neo_instructions_node = await store.get_node(neo_instructions_node_id)
-
-    if neo_instructions_node is None:
-        # Try to find by title across all agent nodes
-        neo_instructions_node = next(
-            (n for n in all_nodes
-             if n["title"].lower() in {"neo instructions", "neo usage policy", "how to manage knowledge"}
-             and n["node_type"] == "concept"),
-            None,
-        )
-
-    if neo_instructions_node is None:
-        # Create fresh at root level
-        neo_instructions_node = await store.create_node(
-            agent_id, "concept", "Neo Instructions",
-            "System reference node: how to use Neo, maintain the knowledge hierarchy, "
-            "and apply node/edge conventions. Do not store research here — use the agent root.",
-            summary="Reference: Neo usage rules, hierarchy, node types, edge types.",
-            confidence=1.0,
-            parent_id=None,
-            source_id=None,
-            spark_id=None,
-            embedding=None,
-            domain=None,
-            metadata={"system": True, "role": "neo_instructions"},
-        )
-        logger.info("Neo: created 'Neo Instructions' node %s", neo_instructions_node["id"])
-    else:
-        # Rename if needed; ensure it lives at root level (parent=None)
-        updates = {}
-        if neo_instructions_node["title"] != "Neo Instructions":
-            updates["title"] = "Neo Instructions"
-        if neo_instructions_node.get("parent_id") is not None:
-            updates["parent_id"] = None
-        if updates:
-            await store.update_node(neo_instructions_node["id"], **updates)
-            neo_instructions_node = {**neo_instructions_node, **updates}
-            logger.info("Neo: updated 'Neo Instructions' node (re-parented/renamed)")
-
-    system_ids.add(neo_instructions_node["id"])
-
-    # ── Step 4: migrate existing orphan nodes ─────────────────────────────────
+    # ── Step 3: migrate existing orphan nodes ────────────────────────────────
     if not config.get("hierarchy_migrated"):
         orphans = [
             n for n in all_nodes
@@ -277,12 +247,12 @@ async def ensure_agent_root_hierarchy(store: StoreInterface, agent: dict) -> str
             for orphan in orphans:
                 await store.update_node(orphan["id"], parent_id=agent_root["id"])
 
-    # ── Step 5: persist IDs in agent config ──────────────────────────────────
+    # ── Step 4: persist IDs in agent config ──────────────────────────────────
     new_config = {
-        **config,
+        key: value for key, value in config.items() if key != "neo_instructions_node_id"
+    } | {
         "root_node_id": agent_root["id"],
         "agents_root_node_id": agents_node["id"],
-        "neo_instructions_node_id": neo_instructions_node["id"],
         "hierarchy_migrated": True,
     }
     await store.update_agent(agent_id, config=new_config)

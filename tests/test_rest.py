@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from neo.config import settings
 from neo.rest.app import create_app
 
 
@@ -96,7 +97,8 @@ def test_rest_graph_hides_agents_root_node():
     assert response.status_code == 200
     body = response.json()
     assert "Semantic Memory" in {node["title"] for node in body["nodes"]}
-    assert "Default" in {node["title"] for node in body["nodes"]}
+    expected_agent_root = settings.agent_name.capitalize()
+    assert expected_agent_root in {node["title"] for node in body["nodes"]}
     assert "Agents" not in {node["title"] for node in body["nodes"]}
 
 

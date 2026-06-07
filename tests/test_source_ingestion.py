@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import re
 
+import httpx
 import pytest
 
 from neo.core.api import NeoAPI
-from neo.core.discovery import DiscoveryJob, extract_knowledge_findings, _clean_source_text
+from neo.core.discovery import DiscoveryJob, IngestionProviderError, extract_knowledge_findings, prefilter_source_text, _clean_source_text
 from neo.store.sqlite import SQLiteStore
 
 
@@ -21,6 +22,20 @@ class StubEmbeddingClient:
 class NoopSparkGenerator:
     async def generate_for_node(self, **kwargs):
         return []
+
+
+class TranscriptPrefilterLLM:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def call(self, prompt: str, max_tokens: int = 1200) -> str:
+        self.prompts.append(prompt)
+        core = (
+            "Agent memory needs provenance-aware retrieval before advice. "
+            "Source metadata lets the agent separate durable research from casual notes. "
+            "Retrieval quality improves when durable findings preserve source grounding and recall cues. "
+        )
+        return core * 20
 
 
 class NoisyExtractionLLM:
@@ -134,6 +149,17 @@ class FailingExtractionLLM:
         raise RuntimeError("provider down")
 
 
+class QuotaFailingExtractionLLM:
+    async def call(self, prompt: str, max_tokens: int = 1200) -> str:
+        request = httpx.Request("POST", "https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent")
+        response = httpx.Response(
+            429,
+            request=request,
+            json={"error": {"status": "RESOURCE_EXHAUSTED", "message": "spending cap exceeded"}},
+        )
+        raise httpx.HTTPStatusError("429 RESOURCE_EXHAUSTED spending cap exceeded", request=request, response=response)
+
+
 class FakeYouTubeSearch:
     async def search(self, query: str, max_results: int = 5, **kwargs):
         return [
@@ -159,6 +185,32 @@ def test_clean_source_text_removes_transcript_boilerplate():
     assert "Transcript" not in cleaned
     assert "https://" not in cleaned
     assert "Agent systems require provenance tracking before deployment" in cleaned
+
+
+@pytest.mark.asyncio
+async def test_prefilter_source_text_removes_low_value_transcript_filler():
+    llm = TranscriptPrefilterLLM()
+    noisy_transcript = " ".join([
+        "Welcome back to the show and remember to like and subscribe.",
+        "Our sponsor today has a promo code and discount code.",
+        "Agent memory needs provenance-aware retrieval before advice.",
+        "Source metadata lets the agent separate durable research from casual notes.",
+    ] * 180)
+
+    filtered, metadata = await prefilter_source_text(
+        source_title="Agent memory interview",
+        source_text=noisy_transcript,
+        source_type="youtube",
+        source_url="https://youtu.be/example",
+        agent_focus="agent memory provenance",
+        llm=llm,
+    )
+
+    assert llm.prompts
+    assert metadata["prefilter_applied"] is True
+    assert metadata["prefilter_reduction_ratio"] > 0
+    assert "provenance-aware retrieval" in filtered
+    assert "promo code" not in filtered.lower()
 
 
 @pytest.mark.asyncio
@@ -322,7 +374,80 @@ async def test_llm_extraction_fallback_is_visible_on_findings():
 
     assert findings
     assert findings[0]["llm_fallback_used"] is True
-    assert findings[0]["llm_fallback_reason"] == "llm_error:RuntimeError"
+    assert findings[0]["llm_fallback_reason"] == "ingestion_llm_error:RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_llm_quota_failure_raises_without_heuristic_fallback():
+    with pytest.raises(IngestionProviderError) as excinfo:
+        await extract_knowledge_findings(
+            source_title="Risk memo",
+            source_text="Autonomous trading agents require strict risk budgets before deployment.",
+            source_type="web",
+            source_url="https://example.com/risk",
+            agent_focus="autonomous agents risk budgets",
+            llm=QuotaFailingExtractionLLM(),
+            max_findings=2,
+            confidence=0.6,
+            allow_heuristic_fallback=False,
+        )
+
+    assert "provider_unhealthy:HTTP 429" in excinfo.value.reason
+
+
+@pytest.mark.asyncio
+async def test_missing_ingestion_provider_does_not_write_nodes(session_factory, monkeypatch):
+    from neo.config import settings
+
+    monkeypatch.setattr(settings, "ingestion_allow_heuristic_fallback", False)
+    monkeypatch.setattr(type(settings), "llm_configured_for", lambda self, task: False)
+    store = SQLiteStore(session_factory)
+    agent = await store.get_or_create_agent("neo", specialty="agentic memory systems")
+    api = NeoAPI(store, embedding_client=StubEmbeddingClient(), spark_generator=NoopSparkGenerator())
+
+    result = await api.ingest_source_text(
+        agent_id=agent["id"],
+        title="Research memo",
+        text="Agent memory needs provenance-aware retrieval before advice.",
+        source_type="web",
+        reference="https://example.com/memo",
+    )
+
+    nodes = await store.get_nodes_by_agent(agent["id"], limit=20)
+    assert result["status"] == "failed"
+    assert result["nodes_created"] == 0
+    assert result["failure_reason"] == "ingestion_llm_provider_missing_or_unconfigured"
+    assert nodes == []
+
+
+@pytest.mark.asyncio
+async def test_ingestion_provider_429_does_not_write_or_count_fallback(session_factory, monkeypatch):
+    import neo.core.llm as llm_module
+    from neo.config import settings
+
+    monkeypatch.setattr(settings, "ingestion_allow_heuristic_fallback", False)
+    monkeypatch.setattr(settings, "llm_ingestion_provider", "gemini")
+    monkeypatch.setattr(settings, "llm_ingestion_model", "gemini-3.5-flash")
+    monkeypatch.setattr(settings, "llm_ingestion_api_key", "test-key")
+    monkeypatch.setattr(llm_module, "NeoLLMClient", lambda **kwargs: QuotaFailingExtractionLLM())
+    store = SQLiteStore(session_factory)
+    agent = await store.get_or_create_agent("neo", specialty="agentic memory systems")
+    api = NeoAPI(store, embedding_client=StubEmbeddingClient(), spark_generator=NoopSparkGenerator())
+
+    result = await api.ingest_source_text(
+        agent_id=agent["id"],
+        title="Risk memo",
+        text="Autonomous trading agents require strict risk budgets before deployment.",
+        source_type="web",
+        reference="https://example.com/risk",
+    )
+
+    nodes = await store.get_nodes_by_agent(agent["id"], limit=20)
+    assert result["status"] == "failed"
+    assert result["nodes_created"] == 0
+    assert result["provider_status"] == "unhealthy"
+    assert "HTTP 429" in result["failure_reason"]
+    assert nodes == []
 
 
 @pytest.mark.asyncio
@@ -332,7 +457,7 @@ async def test_youtube_storage_uses_source_title_as_metadata_not_node_title(sess
     store = SQLiteStore(session_factory)
     agent = await store.get_or_create_agent("neo")
     api = NeoAPI(store, embedding_client=StubEmbeddingClient(), spark_generator=NoopSparkGenerator())
-    job = DiscoveryJob(api)
+    job = DiscoveryJob(api, ingestion_llm=RecordingIngestionLLM())
 
     class FakeFetcher:
         def fetch(self, video_id: str):
@@ -358,11 +483,11 @@ async def test_youtube_storage_uses_source_title_as_metadata_not_node_title(sess
     nodes = await store.get_nodes_by_agent(agent["id"], limit=20)
     stored_findings = [node for node in nodes if (node.get("metadata") or {}).get("video_id") == "abc12345678"]
 
-    assert len(results) == 3
-    assert len(stored_findings) == 3
+    assert len(results) == len(stored_findings)
+    assert len(stored_findings) > 0
     assert all(node["title"] != source_title for node in stored_findings)
     assert {node["metadata"]["source_title"] for node in stored_findings} == {source_title}
-    assert {node["metadata"]["findings_total"] for node in stored_findings} == {3}
+    assert {node["metadata"]["findings_total"] for node in stored_findings} == {len(stored_findings)}
 
 
 @pytest.mark.asyncio
@@ -433,6 +558,7 @@ async def test_ingest_source_url_fetches_youtube_transcript(session_factory, mon
         title="The Science of Building a Premium Brand",
         domain="brand-strategy",
         max_findings=3,
+        allow_heuristic_fallback=True,
     )
 
     source = await store.get_source(result["source_id"])
@@ -465,6 +591,7 @@ async def test_ingest_source_text_stores_source_and_recall_cues(session_factory)
         reference="https://example.com/memo",
         domain="agent-memory",
         max_findings=2,
+        allow_heuristic_fallback=True,
     )
 
     nodes = await store.get_nodes_by_agent(agent["id"], limit=20)
@@ -500,6 +627,7 @@ async def test_ingest_source_text_preserves_manual_source_confidence(session_fac
         source_confidence=0.91,
         user_endorsed=True,
         max_findings=1,
+        allow_heuristic_fallback=True,
     )
 
     source = await store.get_source(result["source_id"])

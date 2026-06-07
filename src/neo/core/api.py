@@ -129,9 +129,11 @@ class NeoAPI:
         max_findings: int | None = None,
         source_confidence: float | None = None,
         user_endorsed: bool = False,
+        allow_heuristic_fallback: bool | None = None,
     ) -> dict[str, Any]:
         from neo.config import settings
         from neo.core.discovery import (
+            IngestionProviderError,
             append_source_provenance,
             build_recall_cues,
             extract_knowledge_findings,
@@ -140,6 +142,7 @@ class NeoAPI:
         agent = await self.store.get_agent(agent_id)
         if agent is None:
             raise ValueError(f"Agent {agent_id} not found")
+        fallback_allowed = settings.ingestion_allow_heuristic_fallback if allow_heuristic_fallback is None else bool(allow_heuristic_fallback)
         ingestion_llm = None
         if settings.llm_configured_for("ingestion"):
             from neo.core.llm import NeoLLMClient
@@ -149,36 +152,93 @@ class NeoAPI:
                 base_url=settings.llm_base_url_for("ingestion"),
                 provider=settings.llm_provider_for("ingestion"),
             )
+        elif not fallback_allowed:
+            return {
+                "source_title": title,
+                "status": "failed",
+                "nodes_created": 0,
+                "nodes": [],
+                "provider_status": "missing",
+                "failure_reason": "ingestion_llm_provider_missing_or_unconfigured",
+                "message": "Source ingestion requires a configured healthy ingestion LLM; heuristic fallback is disabled.",
+            }
+        prefilter_llm = None
+        if settings.llm_configured_for("prefilter"):
+            from neo.core.llm import NeoLLMClient
+            prefilter_llm = NeoLLMClient(
+                api_key=settings.llm_api_key_for("prefilter"),
+                model=settings.llm_model_for("prefilter"),
+                base_url=settings.llm_base_url_for("prefilter"),
+                provider=settings.llm_provider_for("prefilter"),
+                timeout=60.0,
+            )
         focus = query_focus or (agent.get("specialty") or "")
+        extraction_text = text
+        prefilter_metadata: dict[str, Any] = {"prefilter_enabled": bool(prefilter_llm)}
+        if prefilter_llm is not None:
+            from neo.core.discovery import prefilter_source_text
+            extraction_text, prefilter_metadata = await prefilter_source_text(
+                source_title=title,
+                source_text=text,
+                source_type=source_type,
+                source_url=reference,
+                agent_focus=focus,
+                llm=prefilter_llm,
+            )
         extraction_confidence = 0.82 if user_endorsed and source_confidence is None else 0.65
         if source_confidence is not None:
             extraction_confidence = max(0.0, min(1.0, float(source_confidence)))
-        findings = await extract_knowledge_findings(
-            source_title=title,
-            source_text=text,
-            source_type=source_type,
-            source_url=reference,
-            agent_focus=focus,
-            llm=ingestion_llm,
-            max_findings=max_findings,
-            confidence=extraction_confidence,
-        )
+        try:
+            findings = await extract_knowledge_findings(
+                source_title=title,
+                source_text=extraction_text,
+                source_type=source_type,
+                source_url=reference,
+                agent_focus=focus,
+                llm=ingestion_llm,
+                max_findings=max_findings,
+                confidence=extraction_confidence,
+                allow_heuristic_fallback=fallback_allowed,
+            )
+        except IngestionProviderError as exc:
+            return {
+                "source_title": title,
+                "status": "failed",
+                "nodes_created": 0,
+                "nodes": [],
+                "provider_status": "unhealthy",
+                "failure_reason": exc.reason,
+                "retryable": exc.retryable,
+                "message": "Source ingestion aborted before writing because the ingestion LLM was unavailable or returned no valid findings.",
+            }
         if preview:
             return {"source_title": title, "findings": findings, "preview": True}
         if not findings:
             return {"source_title": title, "nodes_created": 0, "nodes": [], "message": "No durable findings extracted."}
+        fallback_findings = [finding for finding in findings if finding.get("llm_fallback_used")]
+        if fallback_findings and not fallback_allowed:
+            return {
+                "source_title": title,
+                "status": "failed",
+                "nodes_created": 0,
+                "nodes": [],
+                "provider_status": "fallback_blocked",
+                "failure_reason": fallback_findings[0].get("llm_fallback_reason") or "heuristic_fallback_blocked",
+                "message": "Source ingestion aborted before writing because heuristic fallback findings are disabled.",
+            }
 
         source_metadata = {
             "query_focus": query_focus,
             "source_confidence": extraction_confidence,
             "user_endorsed": bool(user_endorsed),
+            **prefilter_metadata,
         }
         source = await self.store.create_source(
             agent_id,
             source_type,
             title,
             reference or title,
-            content=text,
+            content=extraction_text,
             metadata={key: value for key, value in source_metadata.items() if value not in (None, "")},
         )
         provenance_parts = [f"Source: {reference}"] if reference else [f"Source: {title}"]
@@ -218,11 +278,32 @@ class NeoAPI:
                     "source_confidence": extraction_confidence,
                     "user_endorsed": bool(user_endorsed),
                     "recall_cues": recall_cues,
+                    "prefilter_enabled": prefilter_metadata.get("prefilter_enabled"),
+                    "prefilter_applied": prefilter_metadata.get("prefilter_applied"),
+                    "prefilter_reduction_ratio": prefilter_metadata.get("prefilter_reduction_ratio"),
+                    "prefilter_model": prefilter_metadata.get("prefilter_model"),
+                    "prefilter_error": prefilter_metadata.get("prefilter_error"),
                 },
                 generate_sparks=True,
                 deduplicate=True,
             )
             nodes.append(result)
+
+        fallback_nodes = [node for node in nodes if (node.get("metadata") or {}).get("llm_fallback_used")]
+        if fallback_nodes and not fallback_allowed:
+            for node in fallback_nodes:
+                node_id = node.get("id")
+                if node_id:
+                    await self.store.delete_node(node_id)
+            return {
+                "source_title": title,
+                "status": "failed",
+                "nodes_created": 0,
+                "nodes": [],
+                "provider_status": "fallback_rolled_back",
+                "failure_reason": "heuristic_fallback_nodes_rolled_back",
+                "message": "Source ingestion rolled back fallback nodes because scheduled ingestion requires LLM-backed findings.",
+            }
 
         return {
             "source_id": source["id"],
@@ -244,6 +325,7 @@ class NeoAPI:
         max_findings: int | None = None,
         source_confidence: float | None = None,
         user_endorsed: bool = False,
+        allow_heuristic_fallback: bool | None = None,
     ) -> dict[str, Any]:
         source_type = "web"
         try:
@@ -277,6 +359,7 @@ class NeoAPI:
             max_findings=max_findings,
             source_confidence=source_confidence,
             user_endorsed=user_endorsed,
+            allow_heuristic_fallback=allow_heuristic_fallback,
         )
 
     async def get_node(

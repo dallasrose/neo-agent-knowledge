@@ -486,6 +486,21 @@ async def test_configure_agent_stores_suggested_sources_in_agent_config(session_
 
 
 @pytest.mark.asyncio
+async def test_default_agent_profiles_seed_research_guidance(session_factory):
+    store = SQLiteStore(session_factory)
+
+    atlas = await store.get_or_create_agent("atlas")
+
+    assert "creative-technical father/operator" in atlas["specialty"]
+    assert "assistant-reliability" in atlas["domains"]
+    assert atlas["config"]["source_default_agent_profile"] is True
+    guidance = atlas["config"]["research_guidance"]
+    assert "M365 or day-job IT administration" in guidance["exclude_unless_requested"]
+    assert any("Atlas/Neo/Hermes assistant reliability" in item for item in guidance["include"])
+    assert atlas["config"]["suggested_sources"]
+
+
+@pytest.mark.asyncio
 async def test_cleanup_active_sparks_abandons_duplicates_and_orphans(session_factory):
     store = SQLiteStore(session_factory)
     agent = await store.get_or_create_agent("neo")

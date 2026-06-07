@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     llm_ingestion_model: str = ""
     llm_ingestion_api_key: str | None = None
     llm_ingestion_base_url: str | None = None
+    # Cheap prefilter used before ingestion extraction to remove transcript filler,
+    # ads, intro/outro chatter, repetition, and off-topic banter.
+    llm_prefilter_provider: str = ""
+    llm_prefilter_model: str = ""
+    llm_prefilter_api_key: str | None = None
+    llm_prefilter_base_url: str | None = None
     llm_recall_provider: str = ""
     llm_recall_model: str = ""
     llm_recall_api_key: str | None = None
@@ -89,6 +95,9 @@ class Settings(BaseSettings):
     discovery_interval_minutes: int = 60   # how often to poll sources
     discovery_batch_size: int = 5          # max new items to ingest per source per cycle
     discovery_lookback_days: int = 30      # how far back to look for new content
+    # Fail closed for durable source/web ingestion: heuristic fallback findings
+    # are debug-only unless this is explicitly enabled or a call opts in.
+    ingestion_allow_heuristic_fallback: bool = False
 
     # Optional: YouTube Data API key for higher-quality search results.
     # Without it, discovery falls back to web search (Exa/Tavily) scoped to youtube.com,
@@ -132,7 +141,7 @@ class Settings(BaseSettings):
     @field_validator("embedding_provider")
     @classmethod
     def validate_embedding_provider(cls, value: str) -> str:
-        supported = {"openai", "mock"}
+        supported = {"openai", "gemini", "google", "google-gemini", "mock"}
         if value not in supported:
             raise ValueError(f"embedding_provider must be one of {sorted(supported)}")
         return value
@@ -182,6 +191,12 @@ class Settings(BaseSettings):
             "openai",
             "openai-compatible",
             "openai_compatible",
+            "xai",
+            "x-ai",
+            "grok",
+            "xai-compatible",
+            "deepseek",
+            "deepseek-openai",
             "vllm",
             "llama.cpp",
         }

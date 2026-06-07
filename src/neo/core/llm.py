@@ -10,6 +10,12 @@ _OPENAI_COMPATIBLE = {
     "openai-compatible",
     "openai_compatible",
     "openrouter",
+    "xai",
+    "x-ai",
+    "grok",
+    "xai-compatible",
+    "deepseek",
+    "deepseek-openai",
     "minimax-openai",
     "minimax_chat_completions",
     "minimax-chat-completions",
@@ -47,7 +53,7 @@ def normalize_llm_provider(provider: str | None) -> str:
     raise ValueError(
         "LLM provider must be one of: anthropic, gemini, google, minimax, "
         "minimax-anthropic, minimax-openai, openai, openai-compatible, "
-        "openrouter, ollama, lmstudio, vllm"
+        "openrouter, xai, x-ai, grok, deepseek, ollama, lmstudio, vllm"
     )
 
 
@@ -122,6 +128,10 @@ class NeoLLMClient:
                 resolved_base_url = "https://openrouter.ai/api/v1"
             elif raw_provider in {"minimax-openai", "minimax-chat-completions", "minimax_chat_completions"}:
                 resolved_base_url = "https://api.minimax.io/v1"
+            elif raw_provider in {"xai", "x-ai", "grok", "xai-compatible"}:
+                resolved_base_url = "https://api.x.ai/v1"
+            elif raw_provider in {"deepseek", "deepseek-openai"}:
+                resolved_base_url = "https://api.deepseek.com/v1"
             elif raw_provider == "ollama":
                 resolved_base_url = "http://127.0.0.1:11434/v1"
             elif raw_provider in {"lmstudio", "lm-studio"}:

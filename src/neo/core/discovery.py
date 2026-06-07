@@ -43,6 +43,50 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
+class IngestionProviderError(RuntimeError):
+    """Raised when durable source ingestion cannot safely use the configured LLM."""
+
+    def __init__(self, reason: str, *, retryable: bool = False) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.retryable = retryable
+
+
+_PROVIDER_FATAL_STATUSES = {401, 403, 404, 429}
+_PROVIDER_FATAL_TEXT = (
+    "quota",
+    "rate limit",
+    "rate_limit",
+    "resource_exhausted",
+    "spend cap",
+    "spending cap",
+    "insufficient_quota",
+    "billing",
+    "authentication",
+    "unauthorized",
+    "forbidden",
+    "permission_denied",
+    "model not found",
+    "not found",
+)
+
+
+def _provider_failure_reason(exc: Exception) -> str:
+    status_code = getattr(getattr(exc, "response", None), "status_code", None)
+    text = str(exc)
+    response = getattr(exc, "response", None)
+    if response is not None:
+        try:
+            text = f"{text} {response.text[:500]}"
+        except Exception:
+            pass
+    lowered = text.lower()
+    if status_code in _PROVIDER_FATAL_STATUSES or any(marker in lowered for marker in _PROVIDER_FATAL_TEXT):
+        status = f"HTTP {status_code}" if status_code else type(exc).__name__
+        return f"ingestion_llm_provider_unhealthy:{status}:{type(exc).__name__}"
+    return f"ingestion_llm_error:{type(exc).__name__}"
+
 _YT_NS = {
     "atom":  "http://www.w3.org/2005/Atom",
     "yt":    "http://www.youtube.com/xml/schemas/2015",
@@ -395,6 +439,132 @@ def _normalize_recall_cues(raw: Any, title: str, summary: str, content: str) -> 
     return build_recall_cues(title, summary, content)
 
 
+def _dedupe_prefiltered_text(text: str) -> str:
+    """Remove exact repeated bullets/sentences from cheap prefilter output."""
+
+    cleaned = _clean_source_text(text)
+    if not cleaned:
+        return ""
+    rough_units = re.split(r"\s*(?:[•*]\s+|(?<=[.!?])\s+)\s*", cleaned)
+    units: list[str] = []
+    seen: set[str] = set()
+    for unit in rough_units:
+        unit = unit.strip(" -–—;:,\t\n")
+        if len(unit.split()) < 5:
+            continue
+        key = _normalize_titleish(unit[:240])
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        units.append(unit)
+    return "\n".join(f"- {unit}" for unit in units) if units else cleaned
+
+
+async def prefilter_source_text(
+    *,
+    source_title: str,
+    source_text: str,
+    source_type: str,
+    source_url: str = "",
+    agent_focus: str = "",
+    llm: Any,
+    min_chars_to_filter: int = 4000,
+) -> tuple[str, dict[str, Any]]:
+    """Use a cheap LLM pass to remove low-value transcript/source filler.
+
+    The prefilter is deliberately conservative: it may delete ads, intros, jokes,
+    repeated stories, vague motivation, and meta-conversation, but it must keep
+    source-grounded ideas, theories, answers, frameworks, mechanisms, examples,
+    tradeoffs, and sharp questions. If the filtered text looks suspiciously short
+    or the model errors, the original cleaned text is returned.
+    """
+
+    cleaned = _clean_source_text(source_text)
+    metadata: dict[str, Any] = {
+        "prefilter_enabled": True,
+        "prefilter_applied": False,
+        "prefilter_model": getattr(llm, "model", None),
+        "prefilter_original_chars": len(cleaned),
+    }
+    if len(cleaned) < min_chars_to_filter:
+        metadata.update({
+            "prefilter_skip_reason": "source_below_min_chars",
+            "prefilter_filtered_chars": len(cleaned),
+            "prefilter_reduction_ratio": 0.0,
+        })
+        return cleaned, metadata
+
+    chunks = _source_text_chunks(cleaned)
+    filtered_chunks: list[str] = []
+    try:
+        for chunk_index, chunk in enumerate(chunks, start=1):
+            prompt = f"""You are a conservative transcript/source prefilter for a semantic memory pipeline.
+
+Source title: {source_title}
+Source URL: {source_url or "unknown"}
+Source type: {source_type}
+Agent research focus: {agent_focus or "general durable knowledge"}
+Chunk: {chunk_index} of {len(chunks)}
+
+Task: remove bullshit before a stronger model extracts durable knowledge.
+
+KEEP ONLY source-grounded material that contains at least one of:
+- an idea, theory, answer, claim, mechanism, framework, mental model, decision rule, tradeoff, anti-pattern, useful example, definition, or open question
+- a concrete practitioner lesson or causal explanation
+- a specific disagreement, caveat, exception, or uncertainty worth remembering
+
+DELETE:
+- ads/sponsors/promo codes, intros/outros, calls to subscribe, greetings, pleasantries
+- jokes, banter, social filler, tangents, repeated stories, recap loops
+- vague motivation, generic inspiration, applause/music/transcript artifacts
+- meta-conversation about the episode unless it contains a transferable lesson
+
+Rules:
+- Do NOT summarize across missing context.
+- Do NOT invent or improve the source's claims.
+- Preserve original meaning and useful specificity.
+- Prefer compact cleaned paragraphs or bullets.
+- If the whole chunk is junk, return exactly: NO_SIGNAL
+
+Chunk text:
+{chunk}"""
+            raw = await llm.call(prompt, max_tokens=2200)
+            filtered = _clean_source_text(raw)
+            if not filtered or filtered.strip().upper() == "NO_SIGNAL":
+                continue
+            filtered_chunks.append(filtered)
+    except Exception as exc:
+        metadata.update({
+            "prefilter_error": f"{type(exc).__name__}:{str(exc)[:120]}",
+            "prefilter_filtered_chars": len(cleaned),
+            "prefilter_reduction_ratio": 0.0,
+        })
+        logger.debug("Source prefilter failed for %r, using original text: %s", source_title, exc)
+        return cleaned, metadata
+
+    filtered_text = _dedupe_prefiltered_text("\n\n".join(filtered_chunks))
+    # Guard against an overzealous cheap model nuking useful signal. A good
+    # transcript filter can be highly compressive, so only reject near-empty
+    # output rather than demanding a large retained percentage.
+    if len(filtered_text) < max(160, int(len(cleaned) * 0.005)):
+        metadata.update({
+            "prefilter_error": "filtered_text_too_short_using_original",
+            "prefilter_filtered_chars": len(filtered_text),
+            "prefilter_reduction_ratio": 0.0,
+        })
+        return cleaned, metadata
+
+    reduction = 1.0 - (len(filtered_text) / max(len(cleaned), 1))
+    metadata.update({
+        "prefilter_applied": True,
+        "prefilter_filtered_chars": len(filtered_text),
+        "prefilter_reduction_ratio": round(max(0.0, min(1.0, reduction)), 4),
+        "prefilter_chunks_total": len(chunks),
+        "prefilter_chunks_kept": len(filtered_chunks),
+    })
+    return filtered_text, metadata
+
+
 async def extract_knowledge_findings(
     *,
     source_title: str,
@@ -405,6 +575,7 @@ async def extract_knowledge_findings(
     llm: Any | None = None,
     max_findings: int | None = None,
     confidence: float = 0.55,
+    allow_heuristic_fallback: bool = True,
 ) -> list[dict[str, Any]]:
     """Extract durable knowledge findings from any source text.
 
@@ -511,12 +682,16 @@ Source chunk text:
                     if limit is not None and len(all_findings) + len(chunk_findings) >= limit:
                         break
             except Exception as exc:
-                fallback_reason = f"llm_error:{type(exc).__name__}"
+                fallback_reason = _provider_failure_reason(exc)
+                if not allow_heuristic_fallback:
+                    raise IngestionProviderError(fallback_reason, retryable=True) from exc
                 logger.debug("LLM source finding extraction failed for chunk %s/%s, using fallback: %s", chunk_index, chunks_total, exc)
 
         if not chunk_findings:
             if llm_attempted and fallback_reason is None:
                 fallback_reason = "llm_returned_no_valid_findings"
+            if llm_attempted and not allow_heuristic_fallback:
+                raise IngestionProviderError(fallback_reason or "ingestion_llm_returned_no_valid_findings")
             chunk_findings = _fallback_findings(
                 source_title=source_title,
                 source_text=chunk,
@@ -727,6 +902,11 @@ class DiscoveryJob:
         self.research_llm = research_llm or llm  # optional: query/source planning LLM
         self.ingestion_llm = ingestion_llm or llm  # optional: source extraction LLM
         self.yt_search = yt_search  # optional: YouTubeSearchClient or EchoSearchAsYouTube
+
+    def _require_ingestion_llm(self) -> Any:
+        if self.ingestion_llm is None:
+            raise IngestionProviderError("ingestion_llm_provider_missing_or_unconfigured")
+        return self.ingestion_llm
 
     async def run(
         self,
@@ -1020,9 +1200,10 @@ class DiscoveryJob:
             source_type="youtube",
             source_url=url,
             agent_focus=specialty,
-            llm=self.ingestion_llm,
+            llm=self._require_ingestion_llm(),
             max_findings=None,
             confidence=confidence,
+            allow_heuristic_fallback=False,
         )
         if not findings:
             return []
@@ -1060,6 +1241,8 @@ class DiscoveryJob:
                     "chunks_total": finding.get("chunks_total"),
                     "extraction_guard_hit": finding.get("extraction_guard_hit"),
                     "extraction_passes_completed": finding.get("extraction_passes_completed"),
+                    "llm_fallback_used": finding.get("llm_fallback_used", False),
+                    "llm_fallback_reason": finding.get("llm_fallback_reason"),
                     "recall_cues": finding.get("recall_cues") or build_recall_cues(
                         finding["title"], finding.get("summary", ""), finding.get("content", "")
                     ),
@@ -1067,6 +1250,11 @@ class DiscoveryJob:
                 generate_sparks=True,
                 deduplicate=True,
             )
+            if (result.get("metadata") or {}).get("llm_fallback_used"):
+                node_id = result.get("id")
+                if node_id:
+                    await self.api.store.delete_node(node_id)
+                raise IngestionProviderError("heuristic_fallback_node_rolled_back")
             results.append(result)
         return results
 
@@ -1081,9 +1269,10 @@ class DiscoveryJob:
             source_type="rss",
             source_url=url,
             agent_focus=(agent.get("specialty") or "").strip(),
-            llm=self.ingestion_llm,
+            llm=self._require_ingestion_llm(),
             max_findings=3,
             confidence=0.5,
+            allow_heuristic_fallback=False,
         )
         if not findings:
             return []
@@ -1112,6 +1301,8 @@ class DiscoveryJob:
                     "published_at": item["published_at"].isoformat() if item.get("published_at") else None,
                     "finding_index": index,
                     "findings_total": len(findings),
+                    "llm_fallback_used": finding.get("llm_fallback_used", False),
+                    "llm_fallback_reason": finding.get("llm_fallback_reason"),
                     "recall_cues": finding.get("recall_cues") or build_recall_cues(
                         finding["title"], finding.get("summary", ""), finding.get("content", "")
                     ),
@@ -1119,6 +1310,11 @@ class DiscoveryJob:
                 generate_sparks=True,
                 deduplicate=True,
             )
+            if (result.get("metadata") or {}).get("llm_fallback_used"):
+                node_id = result.get("id")
+                if node_id:
+                    await self.api.store.delete_node(node_id)
+                raise IngestionProviderError("heuristic_fallback_node_rolled_back")
             results.append(result)
         return results
 
